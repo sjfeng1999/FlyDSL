@@ -1,5 +1,6 @@
 from .._mlir import ir
-from .._mlir.dialects import arith as _arith, fly
+from .._mlir.dialects import arith as _arith
+from .._mlir.dialects import fly
 from .._mlir.dialects.fly import (
     # Enum Attributes
     AddressSpace,
@@ -256,11 +257,6 @@ def slice(src, coord, loc=None, ip=None):
         coordTy, dyncElems = fly.infer_int_tuple_type(coord)
         coord = fly.make_coord(coordTy, dyncElems, loc=loc, ip=ip)
     return fly.slice(src, coord, loc=loc, ip=ip)
-
-
-@dsl_api_wrapper
-def get_leaf(int_tuple, leaf_idx, loc=None, ip=None):
-    return fly.get_leaf(int_tuple, leaf_idx, loc=loc, ip=ip)
 
 
 @dsl_api_wrapper
