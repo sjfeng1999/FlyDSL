@@ -4,6 +4,7 @@ import os
 import subprocess
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from setuptools import Distribution, find_namespace_packages, find_packages, setup
@@ -60,7 +61,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 PY_SRC_REL = Path("python")
 DEFAULT_BUILD_DIR_REL = Path("build-fly")
 
-_build_dir_env = os.environ.get("FLY_BUILD_DIR") or os.environ.get("FLIR_BUILD_DIR")
+_build_dir_env = os.environ.get("FLY_BUILD_DIR")
 if _build_dir_env:
     _build_dir_path = Path(_build_dir_env)
     if _build_dir_path.is_absolute():
@@ -83,29 +84,43 @@ EMBEDDED_MLIR_ROOT = REPO_ROOT / EMBEDDED_MLIR_ROOT_REL
 EMBEDDED__MLIR = REPO_ROOT / EMBEDDED__MLIR_REL
 
 
-def _git_info() -> tuple[str, str]:
-    """Return (short_commit_hash, commit_count) from git, or ("", "") on failure."""
-    commit = ""
-    count = ""
+def _git_short_hash() -> str:
+    """Return the short commit hash from `git rev-parse --short HEAD`, or "" on failure."""
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5, cwd=str(REPO_ROOT),
         )
         if r.returncode == 0:
-            commit = r.stdout.strip()
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _git_rev_count() -> str:
+    """Return the commit count from `git rev-list --count HEAD`, or "" on failure."""
+    try:
         r = subprocess.run(
             ["git", "rev-list", "--count", "HEAD"],
             capture_output=True, text=True, timeout=5, cwd=str(REPO_ROOT),
         )
         if r.returncode == 0:
-            count = r.stdout.strip()
+            return r.stdout.strip()
     except Exception:
         pass
-    return commit, count
+    return ""
 
 
 def _read_version() -> str:
+    """Build the package version based on FLYDSL_RELEASE_TYPE.
+
+    Release types (set via env var FLYDSL_RELEASE_TYPE):
+      nightlies   -> {base}+{YYYYMMDD}.{git_hash}     (e.g. 0.1.0+20260309.a1b2c3d)
+      devreleases -> {base}.dev{YYYYMMDD}+{git_hash}   (e.g. 0.1.0.dev20260309+a1b2c3d)
+      release     -> {base}                             (e.g. 0.1.0)
+      <unset>     -> {base}.dev{commit_count}           (legacy local dev builds)
+    """
     init_py = (PY_SRC / "flydsl" / "__init__.py").read_text(encoding="utf-8")
     base_version = "0.0.0"
     for line in init_py.splitlines():
@@ -113,16 +128,29 @@ def _read_version() -> str:
             base_version = line.split("=", 1)[1].strip().strip('"').strip("'")
             break
 
-    git_commit, commit_count = _git_info()
-    if not git_commit or "+" in base_version:
+    if "+" in base_version:
         return base_version
 
-    # Default: <base>.dev<N>+<hash>  (e.g. 0.1.0.dev335+38ebbc0)
-    #   pip install works; commit count is monotonically increasing for ordering,
-    #   hash suffix allows tracing back to the exact commit.
-    # The +<local> part is automatically stripped by PyPI uploads.
-    dev_tag = f".dev{commit_count}" if commit_count else ""
-    return f"{base_version}{dev_tag}+{git_commit}"
+    release_type = os.environ.get("FLYDSL_RELEASE_TYPE", "").strip().lower()
+    git_hash = _git_short_hash()
+    date_tag = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+    if release_type == "nightlies":
+        local = ".".join(filter(None, [date_tag, git_hash]))
+        return f"{base_version}+{local}"
+    elif release_type == "devreleases":
+        version = f"{base_version}.dev{date_tag}"
+        if git_hash:
+            version += f"+{git_hash}"
+        return version
+    elif release_type == "release":
+        return base_version
+
+    # Legacy: local dev builds without FLYDSL_RELEASE_TYPE
+    commit_count = _git_rev_count()
+    if not commit_count:
+        return base_version
+    return f"{base_version}.dev{commit_count}"
 
 
 def _write_version_file(version: str) -> None:
@@ -184,11 +212,7 @@ _assert_embedded_mlir_exists()
 IS_WHEEL_BUILD = any(a in {"bdist_wheel", "sdist"} for a in os.sys.argv[1:])
 
 def _strip_embedded_shared_libs() -> None:
-    """Reduce wheel size by stripping debug symbols from embedded shared libraries.
-
-    Mirrors the behavior in `flir/build.sh` for wheel builds, but is safe to run
-    directly from `python setup.py bdist_wheel`.
-    """
+    """Strip debug symbols from embedded shared libraries to reduce wheel size."""
     strip_bin = shutil.which("strip")
     if not strip_bin:
         print("Warning: strip not found; skipping binary stripping.")

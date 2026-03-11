@@ -1,6 +1,5 @@
 from .._mlir import ir
-from .._mlir.dialects import arith as _arith
-from .._mlir.dialects import fly
+from .._mlir.dialects import arith as _arith, fly
 from .._mlir.dialects.fly import (
     # Enum Attributes
     AddressSpace,
@@ -16,7 +15,7 @@ from .._mlir.dialects.fly import (
     SwizzleType,
 )
 from .._mlir.extras import types as T
-from .meta import dsl_api_wrapper
+from .meta import traced_op
 from .typing import Int32
 
 UniversalCopy = lambda bit_size: CopyOpUniversalCopyType.get(bit_size)  # noqa: E731
@@ -130,76 +129,76 @@ def depth(int_or_tuple):
     return fly.depth(int_or_tuple)
 
 
-@dsl_api_wrapper
+@traced_op
 def static(result_type, loc=None, ip=None):
     return fly.static(result_type, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def int_tuple_add(lhs, rhs, loc=None, ip=None):
     return fly.int_tuple_add(lhs, rhs, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def int_tuple_sub(lhs, rhs, loc=None, ip=None):
     return fly.int_tuple_sub(lhs, rhs, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def int_tuple_mul(lhs, rhs, loc=None, ip=None):
     return fly.int_tuple_mul(lhs, rhs, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def int_tuple_div(lhs, rhs, loc=None, ip=None):
     return fly.int_tuple_div(lhs, rhs, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def int_tuple_product(int_tuple, loc=None, ip=None):
     return fly.int_tuple_product(int_tuple, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def int_tuple_product_each(int_tuple, loc=None, ip=None):
     return fly.int_tuple_product_each(int_tuple, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_identity_tensor(shape, loc=None, ip=None):
     return fly.make_identity_tensor(shape, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_identity_layout(shape, loc=None, ip=None):
     return fly.make_identity_layout(shape, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_shape(*shape, loc=None, ip=None):
     IntTupleTy, dyncElems = fly.infer_int_tuple_type(shape)
     return fly.make_shape(IntTupleTy, dyncElems, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_stride(*stride, loc=None, ip=None):
     IntTupleTy, dyncElems = fly.infer_int_tuple_type(stride)
     return fly.make_stride(IntTupleTy, dyncElems, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_coord(*coord, loc=None, ip=None):
     IntTupleTy, dyncElems = fly.infer_int_tuple_type(coord)
     return fly.make_coord(IntTupleTy, dyncElems, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_int_tuple(elems, loc=None, ip=None):
     IntTupleTy, dyncElems = fly.infer_int_tuple_type(elems)
     return fly.make_int_tuple(IntTupleTy, dyncElems, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_layout(shape, stride, loc=None, ip=None):
     if not isinstance(shape, ir.Value):
         shapeTy, dyncElems = fly.infer_int_tuple_type(shape)
@@ -210,7 +209,7 @@ def make_layout(shape, stride, loc=None, ip=None):
     return fly.make_layout(shape, stride=stride, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_ordered_layout(shape, order, loc=None, ip=None):
     if not isinstance(shape, ir.Value):
         shapeTy, dyncElems = fly.infer_int_tuple_type(shape)
@@ -221,12 +220,12 @@ def make_ordered_layout(shape, order, loc=None, ip=None):
     return fly.make_ordered_layout(shape, order, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_fragment_like(tensor, dtype=None, loc=None, ip=None):
     return fly.make_fragment_like(tensor, dtype=dtype, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def size(int_tuple, loc=None, ip=None):
     result = fly.size(int_tuple, loc=loc, ip=ip)
     # If the int_tuple is static, return the static value
@@ -236,22 +235,31 @@ def size(int_tuple, loc=None, ip=None):
     return result
 
 
-@dsl_api_wrapper
+@traced_op
+def cosize(layout, loc=None, ip=None):
+    result = fly.cosize(layout, loc=loc, ip=ip)
+    result_ty = IntTupleType(result.type)
+    if result_ty.is_leaf and result_ty.is_static:
+        return Int32(result_ty.static_value)
+    return result
+
+
+@traced_op
 def get_scalar(int_tuple, loc=None, ip=None):
     return fly.get_scalar(int_tuple, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def get_shape(layout, loc=None, ip=None):
     return fly.get_shape(layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def get_stride(layout, loc=None, ip=None):
     return fly.get_stride(layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def slice(src, coord, loc=None, ip=None):
     if not isinstance(coord, ir.Value):
         coordTy, dyncElems = fly.infer_int_tuple_type(coord)
@@ -259,17 +267,22 @@ def slice(src, coord, loc=None, ip=None):
     return fly.slice(src, coord, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
+def get_leaf(int_tuple, leaf_idx, loc=None, ip=None):
+    return fly.get_leaf(int_tuple, leaf_idx, loc=loc, ip=ip)
+
+
+@traced_op
 def get_flat_coord(index, layout, loc=None, ip=None):
     return fly.get_flat_coord(index, layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def crd2idx(crd, layout, loc=None, ip=None):
     return fly.crd2idx(crd, layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def idx2crd(idx, layout, loc=None, ip=None):
     if isinstance(idx, ir.Value) and not str(idx.type).startswith("!fly.int_tuple"):
         IntTupleTy, dyncElems = fly.infer_int_tuple_type((idx,))
@@ -277,7 +290,7 @@ def idx2crd(idx, layout, loc=None, ip=None):
     return fly.idx2crd(idx, layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def get(int_tuple, mode, loc=None, ip=None):
     if isinstance(int_tuple, (list, tuple)):
         return int_tuple[mode]
@@ -288,12 +301,12 @@ def get(int_tuple, mode, loc=None, ip=None):
     return result
 
 
-@dsl_api_wrapper
+@traced_op
 def composition(layout, tiler, loc=None, ip=None):
     return fly.composition(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def complement(layout, codomain_size, loc=None, ip=None):
     if not isinstance(codomain_size, ir.Value):
         codomain_sizeTy, dyncElems = fly.infer_int_tuple_type(codomain_size)
@@ -301,17 +314,17 @@ def complement(layout, codomain_size, loc=None, ip=None):
     return fly.complement(layout, codomain_size=codomain_size, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def right_inverse(layout, loc=None, ip=None):
     return fly.right_inverse(layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def coalesce(layout, pattern=None, loc=None, ip=None):
     return fly.coalesce(layout, pattern=pattern, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def recast_layout(layout, old_type_bits, new_type_bits, loc=None, ip=None):
     def _to_static_bits(v):
         if isinstance(v, int):
@@ -327,87 +340,87 @@ def recast_layout(layout, old_type_bits, new_type_bits, loc=None, ip=None):
     return fly.recast_layout(new_type_bits=new_type_bits, old_type_bits=old_type_bits, src=layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def zip(lhs, rhs, loc=None, ip=None):
     return fly.zip(lhs, rhs, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def select(int_tuple, indices, loc=None, ip=None):
     return fly.select(int_tuple, indices=indices, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def group(int_tuple, begin: int, end: int, loc=None, ip=None):
     return fly.group(int_tuple, begin=begin, end=end, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def append(base, elem, n: int | None = None, loc=None, ip=None):
     return fly.append(base, elem, n=n, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def prepend(base, elem, n: int | None = None, loc=None, ip=None):
     return fly.prepend(base, elem, n=n, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def logical_divide(layout, divisor, loc=None, ip=None):
     return fly.logical_divide(layout, divisor, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def zipped_divide(layout, divisor, loc=None, ip=None):
     return fly.zipped_divide(layout, divisor, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def tiled_divide(layout, divisor, loc=None, ip=None):
     return fly.tiled_divide(layout, divisor, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def flat_divide(layout, divisor, loc=None, ip=None):
     return fly.flat_divide(layout, divisor, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def logical_product(layout, tiler, loc=None, ip=None):
     return fly.logical_product(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def zipped_product(layout, tiler, loc=None, ip=None):
     return fly.zipped_product(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def tiled_product(layout, tiler, loc=None, ip=None):
     return fly.tiled_product(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def flat_product(layout, tiler, loc=None, ip=None):
     return fly.flat_product(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def block_product(layout, tiler, loc=None, ip=None):
     return fly.block_product(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def raked_product(layout, tiler, loc=None, ip=None):
     return fly.raked_product(layout, tiler, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def memref_alloca(memref_type, layout, loc=None, ip=None):
     return fly.memref_alloca(memref_type, layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def memref_load(memref, indices, loc=None, ip=None):
     # `fly.memref.load` expects `indices` as `!fly.int_tuple` (typically a scalar offset).
     # Accept convenience forms:
@@ -428,7 +441,7 @@ def memref_load(memref, indices, loc=None, ip=None):
     return fly.memref_load(memref, indices, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def memref_store(value, memref, indices, loc=None, ip=None):
     if isinstance(indices, ir.Value):
         if str(indices.type).startswith("!fly.int_tuple"):
@@ -442,44 +455,44 @@ def memref_store(value, memref, indices, loc=None, ip=None):
     return fly.memref_store(value, memref, indices, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def memref_load_vec(memref, loc=None, ip=None):
     return fly.memref_load_vec(memref, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def memref_store_vec(vector, memref, loc=None, ip=None):
     return fly.memref_store_vec(vector, memref, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def get_layout(memref, loc=None, ip=None):
     return fly.get_layout(memref, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def get_iter(memref, loc=None, ip=None):
     return fly.get_iter(memref, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_view(iter, layout, loc=None, ip=None):
     return fly.make_view(iter, layout, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_ptr(result_type, args, loc=None, ip=None):
     return fly.make_ptr(result_type, args, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def add_offset(ptr, offset, loc=None, ip=None):
     if not isinstance(offset, ir.Value):
         offset = make_int_tuple(offset, loc=loc, ip=ip)
     return fly.add_offset(ptr, offset, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_copy_atom(copy_op_type, elem_type, loc=None, ip=None):
     from .derived import CopyAtom
     from .numeric import NumericMeta
@@ -499,14 +512,14 @@ def make_copy_atom(copy_op_type, elem_type, loc=None, ip=None):
     return CopyAtom(fly.make_copy_atom(copy_atom_ty, val_bits=val_bits, loc=loc, ip=ip))
 
 
-@dsl_api_wrapper
+@traced_op
 def make_mma_atom(atom_type, loc=None, ip=None):
     from .derived import MmaAtom
 
     return MmaAtom(fly.make_mma_atom(atom_type, loc=loc, ip=ip))
 
 
-@dsl_api_wrapper
+@traced_op
 def make_tile(*args, loc=None, ip=None):
     if len(args) == 1 and isinstance(args[0], (list, tuple)):
         modes = args[0]
@@ -521,61 +534,61 @@ def make_tile(*args, loc=None, ip=None):
     return fly.make_tile(resolved, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def mma_atom_call(mma_atom, d, a, b, c, loc=None, ip=None):
     return fly.mma_atom_call(mma_atom, d, a, b, c, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def copy_atom_call(copy_atom, src, dst, loc=None, ip=None):
     return fly.copy_atom_call(copy_atom, src, dst, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def make_tiled_copy(copy_atom, layout_thr_val, tile_mn, loc=None, ip=None):
     from .derived import TiledCopy
 
     return TiledCopy(fly.make_tiled_copy(copy_atom, layout_thr_val, tile_mn, loc=loc, ip=ip))
 
 
-@dsl_api_wrapper
+@traced_op
 def make_tiled_mma(mma_atom, atom_layout, permutation=None, loc=None, ip=None):
     from .derived import TiledMma
 
     return TiledMma(fly.make_tiled_mma(mma_atom, atom_layout, permutation=permutation, loc=loc, ip=ip))
 
 
-@dsl_api_wrapper
+@traced_op
 def tiled_copy_partition_src(tiled_copy, src, thr_int_tuple, loc=None, ip=None):
     return fly.tiled_copy_partition_src(tiled_copy, src, thr_int_tuple, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def tiled_copy_partition_dst(tiled_copy, dst, thr_int_tuple, loc=None, ip=None):
     return fly.tiled_copy_partition_dst(tiled_copy, dst, thr_int_tuple, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def tiled_copy_retile(tiled_copy, t, loc=None, ip=None):
     return fly.tiled_copy_retile(tiled_copy, t, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def tiled_mma_partition(operand_id, tiled_mma, t, coord, loc=None, ip=None):
     return fly.tiled_mma_partition(operand_id, tiled_mma, t, coord, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def copy(copy_atom, src, dst, *, pred=None, loc=None, ip=None):
     return fly.copy(copy_atom, src, dst, pred=pred, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def gemm(mma_atom, d, a, b, c, loc=None, ip=None):
     return fly.gemm(mma_atom, d, a, b, c, loc=loc, ip=ip)
 
 
-@dsl_api_wrapper
+@traced_op
 def printf(*args, format_str="", loc=None, ip=None):
     def _convert_printf_value(val):
         """Convert Python values to MLIR Values for printf.
@@ -592,8 +605,8 @@ def printf(*args, format_str="", loc=None, ip=None):
             return (False, _arith.constant(T.i32(), val))
         elif isinstance(val, float):
             return (False, _arith.constant(T.f64(), val))
-        elif hasattr(val, "__extract_ir_values__"):
-            ir_values = val.__extract_ir_values__()
+        elif hasattr(val, "__fly_values__"):
+            ir_values = val.__fly_values__()
             if len(ir_values) == 1:
                 return (False, ir_values[0])
             raise ValueError(f"Cannot use multi-value type in printf: {type(val)}")

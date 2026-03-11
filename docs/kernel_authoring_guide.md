@@ -2,6 +2,8 @@
 
 > Writing GPU kernels with FlyDSL: `@flyc.jit`, `@flyc.kernel`, expression API, launch configuration, shared memory, and synchronization.
 
+> **API**: This guide documents the `@flyc.kernel`/`@flyc.jit` API from `flydsl.compiler` and `flydsl.expr` (`python/flydsl/`).
+
 ## Quick Reference
 
 | Concept | API | Description |
@@ -77,7 +79,7 @@ vec_add(A, B, C, 1024)
    - Calling `vec_add_kernel(...)` emits a `gpu.func` in `gpu.module`
    - `.launch()` emits `gpu.launch_func`
    - `MlirCompiler.compile()` runs the full pass pipeline
-   - `JitCompiledFunction` wraps the resulting ExecutionEngine
+   - `JITCFunction` wraps the resulting ExecutionEngine
 4. Subsequent calls with the same type signature use the cached binary
 
 ---
@@ -148,10 +150,10 @@ class MyCustomAdaptor:
     def __init__(self, value: MyCustomType):
         self.value = value
 
-    def __ir_types__(self):
+    def __fly_types__(self):
         return [...]  # MLIR types for this argument
 
-    def __c_pointers__(self):
+    def __fly_ptrs__(self):
         return [...]  # ctypes pointers for invocation
 ```
 
@@ -249,20 +251,59 @@ buffer_ops.buffer_store(data, rsrc, byte_offset)
 
 ### 4.4 ROCm Intrinsics (`fx.rocdl`)
 
+#### High-Level Helpers
+
 ```python
 from flydsl.expr import rocdl
 
-# MFMA instructions
-result = rocdl.mfma_f32_16x16x16_f16(a, b, acc)
-result = rocdl.mfma_f32_16x16x32_fp8(a, b, acc)
-result = rocdl.mfma_i32_16x16x32i8(a, b, acc)
+# Buffer tensor — wraps a Tensor with AMD buffer resource descriptor
+A_buf = rocdl.make_buffer_tensor(A)
 
+# MFMA MMA atom constructor — returns MmaAtomCDNA3_MFMAType
+atom_type = rocdl.MFMA(m=16, n=16, k=32, elem_ty_ab=fx.Float8E4M3FNUZ)
+
+# Buffer copy atom types
+copy_op = rocdl.BufferCopy128b()   # 128-bit buffer copy
+copy_op = rocdl.BufferCopy64b()    # 64-bit buffer copy
+copy_op = rocdl.BufferCopy32b()    # 32-bit buffer copy
+```
+
+#### MFMA Instructions
+
+Signature: `(result_type, [a, b, c, cbsz, abid, blgp])` — trailing ints default to 0.
+
+```python
+result = rocdl.mfma_f32_16x16x16f16(result_type, [a, b, acc])
+result = rocdl.mfma_f32_16x16x32_fp8_fp8(result_type, [a, b, acc])
+result = rocdl.mfma_i32_16x16x32_i8(result_type, [a, b, acc])
+result = rocdl.mfma_f32_16x16x16bf16_1k(result_type, [a, b, acc])   # BF16 1K variant
+
+# GFX950 scaled MFMA (MXFP4/FP6/FP8)
+result = rocdl.mfma_scale_f32_16x16x128_f8f6f4(
+    result_type, [a, b, acc, cbsz, blgp, opselA, scaleA, opselB, scaleB]
+)
+```
+
+#### Instruction Scheduling Barriers
+
+Control instruction scheduling for performance tuning:
+
+```python
+rocdl.sched_mfma(cnt)    # wait for cnt MFMA instructions to complete
+rocdl.sched_vmem(cnt)    # wait for cnt VMEM reads to complete
+rocdl.sched_dsrd(cnt)    # wait for cnt DS (LDS) reads to complete
+rocdl.sched_dswr(cnt)    # wait for cnt DS (LDS) writes to complete
+```
+
+#### Low-Level Ops
+
+```python
 # Warp shuffle
 val = rocdl.ds_bpermute(idx, src)
 
-# LDS operations
-rocdl.ds_write_b128(lds_ptr, offset, data)
-data = rocdl.ds_read_b128(lds_ptr, offset)
+# Buffer load/store (raw)
+data = rocdl.raw_ptr_buffer_load(rsrc, offset, soffset, aux)
+rocdl.raw_ptr_buffer_store(data, rsrc, offset, soffset, aux)
 ```
 
 ### 4.5 GPU Operations (`fx.gpu`)
@@ -451,7 +492,7 @@ FLYDSL_DUMP_IR=1 FLYDSL_DUMP_DIR=./my_dumps python my_script.py
 # After compilation, access IR from the compiled function:
 result = launch(A, B, C, 1024)
 
-# Or use JitCompiledFunction directly:
+# Or use JITCFunction directly:
 compiled_func.print_ir()              # compiled MLIR IR
 compiled_func.print_ir(compiled=False) # original IR before passes
 ```
@@ -468,7 +509,7 @@ Shows the diff between original and rewritten AST for debugging control flow tra
 
 ## 11. Complete Example: Preshuffle GEMM
 
-From `kernels/preshuffle_gemm_flyc.py`:
+From `kernels/preshuffle_gemm.py`:
 
 ```python
 import flydsl.compiler as flyc
@@ -528,7 +569,7 @@ Writing a new kernel?
 ├── Matrix multiply (GEMM)?
 │   ├── Use @flyc.kernel + SmemAllocator + MFMA
 │   ├── B-preshuffle layout from mfma_preshuffle_pipeline.py
-│   └── See kernels/preshuffle_gemm_flyc.py
+│   └── See kernels/preshuffle_gemm.py
 │
 ├── Need shared memory?
 │   ├── Use SmemAllocator with target arch
@@ -549,7 +590,7 @@ Writing a new kernel?
 | `python/flydsl/compiler/__init__.py` | Public API: `jit`, `kernel`, `from_dlpack` |
 | `python/flydsl/compiler/jit_function.py` | `@jit` decorator, `MlirCompiler`, `JitCacheManager` |
 | `python/flydsl/compiler/kernel_function.py` | `@kernel` decorator, `KernelFunction`, `KernelLauncher` |
-| `python/flydsl/compiler/jit_executor.py` | `JitCompiledFunction` (ExecutionEngine wrapper) |
+| `python/flydsl/compiler/jit_executor.py` | `JITCFunction` (ExecutionEngine wrapper) |
 | `python/flydsl/compiler/jit_argument.py` | `JitArgumentRegistry`, `TensorAdaptor` |
 | `python/flydsl/compiler/ast_rewriter.py` | `ASTRewriter` — Python AST → MLIR control flow |
 | `python/flydsl/expr/typing.py` | `Types` (`T`), `Tensor`, `Stream`, `Constexpr` |
@@ -560,7 +601,7 @@ Writing a new kernel?
 | `python/flydsl/expr/rocdl.py` | ROCm dialect intrinsics |
 | `python/flydsl/expr/primitive.py` | Layout algebra primitives (make_shape, crd2idx, etc.) |
 | `python/flydsl/utils/smem_allocator.py` | `SmemAllocator`, `SmemPtr`, LDS management |
-| `kernels/preshuffle_gemm_flyc.py` | Preshuffle GEMM kernel example |
+| `kernels/preshuffle_gemm.py` | Preshuffle GEMM kernel example |
 | `kernels/reduce.py` | Warp/block reduction primitives |
 | `tests/kernels/test_vec_add.py` | Vector add kernel test |
 | `tests/kernels/test_preshuffle_gemm.py` | Preshuffle GEMM test |

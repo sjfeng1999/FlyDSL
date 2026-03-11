@@ -9,11 +9,8 @@ cd "$(dirname "$0")/.."
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
-# Locate the build directory (default: .flir/build; fallback: build/).
-BUILD_DIR="${FLIR_BUILD_DIR:-${REPO_ROOT}/.flir/build}"
-if [ ! -d "${BUILD_DIR}" ] && [ -d "${REPO_ROOT}/build-fly" ]; then
-  BUILD_DIR="${REPO_ROOT}/build-fly"
-fi
+# Locate the build directory (default: build-fly; fallback: build/).
+BUILD_DIR="${FLY_BUILD_DIR:-${REPO_ROOT}/build-fly}"
 if [ ! -d "${BUILD_DIR}" ] && [ -d "${REPO_ROOT}/build" ]; then
   BUILD_DIR="${REPO_ROOT}/build"
 fi
@@ -35,11 +32,14 @@ FAIL_COUNT=0
 # Benchmark Configuration
 # ============================================================================
 
-# Softmax/LayerNorm shapes: "M,N,dtype"
+# Softmax/LayerNorm/RMSNorm shapes: "M,N,dtype"
 SOFTMAX_SHAPES='
 32768,8192,bf16
 '
 LAYERNORM_SHAPES='
+32768,8192,bf16
+'
+RMSNORM_SHAPES='
 32768,8192,bf16
 '
 
@@ -49,14 +49,23 @@ fp8,16,40960,5120,16,128,256
 fp8,16,77824,5120,16,128,256
 fp8,5120,5120,8320,64,256,128
 fp8,9728,8192,8320,64,256,128
+fp8,8192,8192,8192,128,256,128
 int8,9728,8192,8320,64,256,128
 int4,9728,8192,8320,64,256,128
 bf16,5120,5120,8320,64,256,128
 '
 
+GEMM_SHAPES_ASYNC='
+fp8,5120,5120,8320,128,256,128
+fp8,9728,8192,8320,128,256,128
+fp8,8192,8192,8192,128,256,128
+int8,9728,8192,8320,128,256,128
+'
+
 # FP4 GEMM shapes (requires --wfp4, gfx950 only): "M,N,K,tile_m,tile_n,tile_k"
 GEMM_FP4_SHAPES='
 8192,8192,8192,64,128,256
+8192,8192,8192,64,256,256
 '
 
 # MoE shapes: "tokens,model_dim,inter_dim,experts,topk,tile_m,tile_n,tile_k,tile_n2,tile_k2"
@@ -83,10 +92,7 @@ Usage:
   bash scripts/run_benchmark.sh --list
 
 Supported ops:
-  softmax | layernorm | gemm | moe
-
-Notes:
-  - `layernorm` is accepted as an alias of `layernorm` (script runs layernorm).
+  softmax | layernorm | rmsnorm | gemm | moe
 USAGE
 }
 
@@ -144,16 +150,18 @@ _normalize_op() {
   esac
 }
 
-# Default: run only GEMM unless user selected a subset.
-# Use positional args or --only to enable others: softmax, layernorm, moe
-RUN_SOFTMAX=0
-RUN_LAYERNORM=0
+# Default: run softmax, norms, and GEMM unless user selected a subset.
+# Use positional args or --only to enable others: softmax, layernorm, rmsnorm, gemm, moe
+RUN_SOFTMAX=1
+RUN_LAYERNORM=1
+RUN_RMSNORM=1
 RUN_PRESHUFFLE_GEMM=1
 RUN_MOE=0
 
 _enable_only_ops() {
   RUN_SOFTMAX=0
   RUN_LAYERNORM=0
+  RUN_RMSNORM=0
   RUN_PRESHUFFLE_GEMM=0
   RUN_MOE=0
   for op in "$@"; do
@@ -161,6 +169,7 @@ _enable_only_ops() {
     case "${op}" in
       softmax) RUN_SOFTMAX=1 ;;
       layernorm) RUN_LAYERNORM=1 ;;
+      rmsnorm) RUN_RMSNORM=1 ;;
       gemm) RUN_PRESHUFFLE_GEMM=1 ;;
       moe) RUN_MOE=1 ;;
       "" ) ;;
@@ -196,6 +205,7 @@ if [ "$#" -gt 0 ]; then
       --list)
         echo "softmax"
         echo "layernorm"
+        echo "rmsnorm"
         echo "gemm"
         echo "moe"
         exit 0
@@ -351,6 +361,30 @@ if [ "${RUN_LAYERNORM}" -eq 1 ]; then
   done
 fi
 
+# RMSNorm
+if [ "${RUN_RMSNORM}" -eq 1 ]; then
+  for shape in $RMSNORM_SHAPES; do
+    oldIFS=$IFS
+    IFS=,
+    # shellcheck disable=SC2086 # intentional word-splitting on IFS=,
+    set -- $shape
+    IFS=$oldIFS
+    M=$1; N=$2; dtype=$3
+    export ROCDSL_RMSNORM_SHAPES="$shape"
+    log="${BENCH_LOG_DIR}/rmsnorm_${M}x${N}_${dtype}.log"
+    if python3 tests/kernels/test_rmsnorm.py >"${log}" 2>&1; then
+      SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    else
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      echo "rmsnorm failed. Log: ${log}" >&2
+      _show_fail_log "${log}" "rmsnorm"
+    fi
+    row="$(_py_parse_and_emit rmsnorm "${M}x${N}" "${dtype}" "${log}")"
+    set -- $row
+    _emit_row "$1" "$2" "$3" "$4" "$5"
+  done
+fi
+
 # Preshuffle GEMM
 if [ "${RUN_PRESHUFFLE_GEMM}" -eq 1 ]; then
   for shape in $GEMM_SHAPES; do
@@ -378,6 +412,49 @@ if [ "${RUN_PRESHUFFLE_GEMM}" -eq 1 ]; then
       _show_fail_log "${log}" "gemm"
     fi
     row="$(_py_parse_and_emit gemm "${M}x${N}x${K}" "${dtype}" "${log}")"
+    set -- $row
+    _emit_row "$1" "$2" "$3" "$4" "$5"
+  done
+
+  GEMM_USE_ASYNC_COPY="${GEMM_USE_ASYNC_COPY:-1}"
+  GEMM_WAVES_PER_EU="${GEMM_WAVES_PER_EU:-2}"
+
+  for shape in $GEMM_SHAPES_ASYNC; do
+    oldIFS=$IFS
+    IFS=,
+    # shellcheck disable=SC2086 # intentional word-splitting on IFS=,
+    set -- $shape
+    IFS=$oldIFS
+    dtype=$1; M=$2; N=$3; K=$4; tile_m=$5; tile_n=$6; tile_k=$7
+
+    async_copy_flag=""
+    async_copy_tag="async_copy"
+    if [ "${GEMM_USE_ASYNC_COPY}" = "1" ] || [ "${GEMM_USE_ASYNC_COPY}" = "true" ]; then
+      async_copy_flag="--use_async_copy"
+    fi
+    waves_per_eu_tag="${GEMM_WAVES_PER_EU}"
+
+    log="${BENCH_LOG_DIR}/preshuffle_gemm_${M}x${N}x${K}_${dtype}_t${tile_m}x${tile_n}x${tile_k}_${async_copy_tag}_${waves_per_eu_tag}.log"
+    if python3 tests/kernels/test_preshuffle_gemm.py \
+      --in_dtype "$dtype" \
+      --num_warmup 10 \
+      --num_iters 100 \
+      -M "$M" \
+      -N "$N" \
+      -K "$K" \
+      --tile_m "$tile_m" \
+      --tile_n "$tile_n" \
+      --tile_k "$tile_k" \
+      ${async_copy_flag} \
+      --waves_per_eu "${GEMM_WAVES_PER_EU}" >"${log}" 2>&1; then
+      SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    else
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      echo "gemm failed. Log: ${log}" >&2
+      _show_fail_log "${log}" "gemm"
+    fi
+    shape_tag="${M}x${N}x${K}"
+    row="$(_py_parse_and_emit gemm_async "${shape_tag}" "${dtype}" "${log}")"
     set -- $row
     _emit_row "$1" "$2" "$3" "$4" "$5"
   done
@@ -422,6 +499,7 @@ if [ "${RUN_PRESHUFFLE_GEMM}" -eq 1 ]; then
         echo "gemm fp4 failed. Log: ${log}" >&2
         _show_fail_log "${log}" "gemm_fp4"
       fi
+
     fi
   done
 fi

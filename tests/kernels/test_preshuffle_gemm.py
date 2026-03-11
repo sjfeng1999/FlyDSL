@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MFMA FP8/INT8/BF16 GEMM Test with B preshuffle — @flyc.kernel API.
 
-Kernel implementation lives in `kernels/preshuffle_gemm_flyc.py`.
+Kernel implementation lives in `kernels/preshuffle_gemm.py`.
 This file is the correctness + perf harness.
 """
 
@@ -20,8 +20,8 @@ if _REPO_ROOT not in sys.path:
 if _PYFLIR_SRC not in sys.path:
     sys.path.insert(0, _PYFLIR_SRC)
 
-from kernels.preshuffle_gemm_flyc import compile_preshuffle_gemm_a8 as compile_preshuffle_gemm_a8_flyc
-from kernels.preshuffle_gemm_flyc import compile_preshuffle_gemm_w4
+from kernels.preshuffle_gemm import compile_preshuffle_gemm_a8
+from kernels.preshuffle_gemm import compile_preshuffle_gemm_w4
 from tests.test_common import run_perftest, verify_output
 from tests.utils import pertoken_quant, shuffle_weight
 from tests.kernels.utils import fp4_utils
@@ -35,7 +35,7 @@ if not torch.cuda.is_available():
 try:
     import aiter
     HAS_AITER = True
-except ImportError:
+except Exception:
     HAS_AITER = False
 
 ARCH = str(get_rocm_arch())
@@ -75,7 +75,7 @@ def run_torch(a, b, scale_a, scale_b, bias=None, dtype=torch.float32):
 @pytest.mark.parametrize("use_async_copy", [False, True], ids=["sync_copy", "async_copy"])
 @pytest.mark.parametrize("test_graph", [
     pytest.param(False, id="eager"),
-    pytest.param(True, id="graph", marks=pytest.mark.large_shape),
+    pytest.param(True, id="graph"),
 ])
 def test_mfma_a8_flyc_preshuffle(
     in_dtype,
@@ -84,11 +84,13 @@ def test_mfma_a8_flyc_preshuffle(
     *,
     use_async_copy,
     test_graph,
+    out_dtype: str = "bf16",
     lds_stage: int = DEFAULT_LDS_STAGE,
     bench_iters: int = DEFAULT_BENCH_ITERS,
     bench_warmup: int = DEFAULT_BENCH_WARMUP,
     run_aiter_bench: bool = DEFAULT_RUN_AITER_BENCH,
     use_cshuffle_epilog: bool = False,
+    waves_per_eu: int = 0,
 ):
     """Preshuffle GEMM using the @flyc.kernel / @flyc.jit API."""
     if use_async_copy and get_rocm_arch() not in ("gfx942", "gfx950"):
@@ -102,16 +104,20 @@ def test_mfma_a8_flyc_preshuffle(
     lds_stage = int(lds_stage)
     if lds_stage not in (1, 2):
         raise ValueError(f"lds_stage must be 1 or 2, got {lds_stage!r}")
+    torch_out_dtype = torch.float16
 
-    launch_fn = compile_preshuffle_gemm_a8_flyc(
+    _wpe = int(waves_per_eu) if waves_per_eu else 0
+    _wpe = None if _wpe <= 0 else _wpe
+    launch_fn = compile_preshuffle_gemm_a8(
         M=M, N=N, K=K,
         tile_m=tile_m, tile_n=tile_n, tile_k=tile_k,
         in_dtype=in_dtype,
         lds_stage=lds_stage,
         use_cshuffle_epilog=bool(use_cshuffle_epilog),
         use_async_copy=bool(use_async_copy),
+        waves_per_eu=_wpe,
     )
-    print(f"✓ Kernel prepared (lds_stage={lds_stage}, async_copy={use_async_copy})")
+    print(f"✓ Kernel prepared (lds_stage={lds_stage}, async_copy={use_async_copy}, waves_per_eu={_wpe})")
 
     size_c = M * N
     size_a = M * K
@@ -166,7 +172,7 @@ def test_mfma_a8_flyc_preshuffle(
         b_packed = _pack_shuffled_int8_to_packed_int4_no_perm(b_shuffled)
 
     c_ref = run_torch(a_q, b_q, scale_a, scale_b, bias=None, dtype=torch.float32)
-    c_out_raw = torch.zeros((M, N), dtype=torch.float16, device=device)
+    c_out_raw = torch.zeros((M, N), dtype=torch_out_dtype, device=device)
 
     b_input = b_packed if is_int4 else b_shuffled
     if scale_a is None:
@@ -215,7 +221,7 @@ def test_mfma_a8_flyc_preshuffle(
         print("Running Aiter Benchmark...")
         try:
             def launch_aiter(a, b, sa, sb):
-                return aiter.gemm_a8w8_bpreshuffle(a, b, sa, sb, None, torch.float16)
+                return aiter.gemm_a8w8_bpreshuffle(a, b, sa, sb, None, torch_out_dtype)
 
             c_aiter, us1 = run_perftest(
                 launch_aiter, a_q, b_shuffled, scale_a, scale_b,
@@ -356,6 +362,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preshuffle GEMM benchmark")
     parser.add_argument("--in_dtype", type=str, default="fp8",
                         choices=["fp8", "int8", "int4", "fp16", "bf16", "fp4"])
+    parser.add_argument("--out_dtype", type=str, default="bf16", choices=["fp16", "bf16"],
+                        help="Output dtype (default: bf16).")
     parser.add_argument("-M", type=int, default=16)
     parser.add_argument("-N", type=int, default=10240)
     parser.add_argument("-K", type=int, default=8192)
@@ -368,6 +376,7 @@ if __name__ == "__main__":
     parser.add_argument("--flyc", action="store_true", default=True)
     parser.add_argument("--use_async_copy", action="store_true", default=False)
     parser.add_argument("--use_cshuffle_epilog", action="store_true", default=False)
+    parser.add_argument("--waves_per_eu", type=int, default=0, choices=[0, 1, 2, 3, 4])
     parser.add_argument("--run_aiter_bench", action="store_true", default=DEFAULT_RUN_AITER_BENCH)
     parser.add_argument("--no_aiter_bench", action="store_false", dest="run_aiter_bench")
     parser.add_argument("--test_graph", "-tg", action="store_true", default=False)
@@ -383,6 +392,7 @@ if __name__ == "__main__":
                 args.in_dtype,
                 M=args.M, N=args.N, K=args.K,
                 tile_m=args.tile_m, tile_n=args.tile_n, tile_k=args.tile_k,
+                out_dtype=args.out_dtype,
                 use_async_copy=bool(args.use_async_copy),
                 test_graph=bool(args.test_graph),
                 lds_stage=args.lds_stage,
@@ -390,6 +400,7 @@ if __name__ == "__main__":
                 bench_warmup=args.num_warmup,
                 run_aiter_bench=bool(args.run_aiter_bench),
                 use_cshuffle_epilog=bool(args.use_cshuffle_epilog),
+                waves_per_eu=int(args.waves_per_eu),
             )
         else:
             test_mfma_w4_flyc_preshuffle(

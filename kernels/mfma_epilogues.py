@@ -4,7 +4,7 @@ This module provides:
 
 - `mfma_epilog(...)`
   A single entrypoint that dispatches to either the default row-epilogue or the
-  CK-style LDS CShuffle epilogue based on input parameters.
+  LDS CShuffle epilogue based on input parameters.
 
 - `default_epilog(...)` (implementation helper)
   A lightweight row-iterator for the common MFMA accumulator-to-output mapping
@@ -13,7 +13,7 @@ This module provides:
   (e.g. loads scales once, loops over ni, stores).
 
 - `c_shuffle_epilog(...)` (implementation helper)
-  A CK-style LDS CShuffle epilogue skeleton:
+  A LDS CShuffle epilogue skeleton:
     1) call `write_row_to_lds(...)` for each MFMA output row to populate `lds_out`
        in row-major [tile_m, tile_n] order
     2) barrier
@@ -26,10 +26,23 @@ modules (`arith`, `vector`, `gpu`) and the `range_constexpr` iterator.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Callable
 
 from flydsl._mlir import ir
 from flydsl.expr.typing import T
+
+
+@contextmanager
+def _if_then(if_op, scf):
+    """Compat helper for SCF IfOp then-region across old/new Python APIs."""
+    with ir.InsertionPoint(if_op.then_block):
+        try:
+            yield if_op.then_block
+        finally:
+            blk = if_op.then_block
+            if (not blk.operations) or not isinstance(blk.operations[-1], scf.YieldOp):
+                scf.YieldOp([])
 
 
 def default_epilog(
@@ -98,7 +111,7 @@ def c_shuffle_epilog(
     precompute_row: Callable | None = None,
     store_pair: Callable,
 ):
-    """CK-style LDS CShuffle epilogue skeleton.
+    """LDS CShuffle epilogue skeleton.
 
     Call pattern:
       - `write_row_to_lds(...)` is called once per MFMA row produced by this thread.
@@ -142,6 +155,8 @@ def c_shuffle_epilog(
             lds_out=lds_out,
         )
 
+    # Ensure all LDS reads finished before the lds write.
+    gpu.barrier()
     default_epilog(
         arith=arith,
         range_constexpr=range_constexpr,
@@ -163,7 +178,7 @@ def c_shuffle_epilog(
     n_reps_shuffle = int(tile_n) // (CShuffleNLane * EVec)
 
     c_nlane = arith.constant(CShuffleNLane, index=True)
-    m_lane = tx / c_nlane
+    m_lane = tx // c_nlane
     n_lane = tx % c_nlane
     c_evec = arith.constant(EVec, index=True)
 
@@ -214,7 +229,7 @@ def c_shuffle_epilog(
 
         if row_pred is not None:
             _if_row = scf.IfOp(row_pred)
-            with _if_row.then():
+            with _if_then(_if_row, scf):
                 _do_store_row()
         else:
             _do_store_row()

@@ -15,7 +15,11 @@ _repo_root = Path(__file__).resolve().parents[1]
 _fly_pkg_dir = _repo_root / "build-fly" / "python_packages"
 if _fly_pkg_dir.exists():
     _p = str(_fly_pkg_dir)
-    if _p not in sys.path:
+    _already = _p in sys.path or any(
+        os.path.isdir(ep) and os.path.samefile(ep, _p)
+        for ep in sys.path if ep
+    )
+    if not _already:
         sys.path.insert(0, _p)
 
 # Legacy: .flir/build or build/ (old flir dialect)
@@ -82,6 +86,14 @@ def insert_point(ctx):
     """Provide insertion point for the module body."""
     with InsertionPoint(ctx.module.body):
         yield InsertionPoint.current
+
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers",
+        "large_shape: marks tests with large shapes that are slow to run (deselect with '-m \"not large_shape\"')",
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):

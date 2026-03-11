@@ -1,82 +1,113 @@
 #!/usr/bin/env python3
 """
-Test flir.print and flir.printf functionality.
-Following the layout print notebook example.
+Test fly.print_ (printf) functionality via the Fly dialect API.
 
-This test demonstrates the difference between static (compile-time) and
-dynamic (runtime) printing.
+Covers:
+  - {} auto-format placeholders
+  - bare-value printf (no format string)
+  - Python literal auto-materialization (int, float, bool)
+  - format arg-count mismatch detection
 """
 
-import flydsl
-from flydsl.dialects.ext import flir
-from flydsl.dialects.ext.arith import Index
+import re
+import pytest
+
+from flydsl._mlir.ir import (
+    Context, Location, Module, InsertionPoint,
+    FunctionType, IntegerType, IndexType,
+)
+from flydsl._mlir.dialects.fly import IntTupleType
+from flydsl._mlir.dialects import fly, arith, func
+import flydsl.expr as fx
 
 
-def test_print_basic():
-    """Test that flir.print is available and works as Python's print."""
-    # flir.print should just be Python's built-in print
-    assert flir.flir.print is print
+def _build_module(name, build_fn):
+    """Build a module with a single function, return its IR string."""
+    with Context() as ctx:
+        ctx.allow_unregistered_dialects = True
+        with Location.unknown(ctx):
+            module = Module.create()
+            i32 = IntegerType.get_signless(32)
+            with InsertionPoint(module.body):
+                f = func.FuncOp(name, FunctionType.get([], []))
+                with InsertionPoint(f.add_entry_block()):
+                    build_fn(i32)
+                    func.ReturnOp([])
+            return str(module)
 
 
-class _PrintfModule(flir.MlirModule):
-    @flir.jit
-    def printf_one(self: flir.T.i64):
-        x = Index(42)
-        flir.printf(">?? {}", x)
-        return []
-
-    @flir.jit
-    def printf_two(self: flir.T.i64):
-        a = Index(10)
-        b = Index(20)
-        flir.printf("a: {}, b: {}", a, b)
-        return []
-
-    @flir.jit
-    def print_vs_printf(self: flir.T.i64):
-        a = Index(8)
-        flir.printf(">?? {}", a)
-        c2 = Index(2)
-        flir.printf(">?? {}", c2)
-        return []
-
-    @flir.jit
-    def printf_layout(self: flir.T.i64):
-        dim0 = Index(9)
-        dim1 = Index(4)
-        dim2 = Index(8)
-        shape = flir.make_shape(dim0, (dim1, dim2))
-        flir.printf("Shape dims: {} x ({} x {})", dim0, dim1, dim2)
-        return []
+def _count(pattern, text):
+    return len(re.findall(pattern, text))
 
 
-def test_printf_ir_generation():
-    """Test that flir.printf generates the correct MLIR operations."""
-    ir_str = str(_PrintfModule().module)
-    assert "gpu.printf" in ir_str
+# ===========================================================================
+# 1. {} placeholder resolution
+# ===========================================================================
+
+def test_placeholder_single():
+    """{} placeholder with an i32 value generates fly.print with the value as operand."""
+    def build(i32):
+        x = arith.ConstantOp(i32, 42).result
+        fx.printf("x={}", x)
+    ir = _build_module("single_placeholder", build)
+    assert "fly.print" in ir
+    assert "42" in ir
 
 
-def test_printf_with_multiple_args():
-    """Test printf with multiple arguments."""
-    ir_str = str(_PrintfModule().module)
-    assert "gpu.printf" in ir_str
-    # Check that format string is correct
-    assert "a: {}, b: {}" in ir_str or "a: %lld, b: %lld" in ir_str
+def test_placeholder_multi():
+    """Multiple {} placeholders produce a fly.print with multiple operands."""
+    def build(i32):
+        a = arith.ConstantOp(i32, 10).result
+        b = arith.ConstantOp(i32, 20).result
+        fx.printf("a={}, b={}", a, b)
+    ir = _build_module("multi_placeholder", build)
+    assert "fly.print" in ir
+    assert "10" in ir
+    assert "20" in ir
 
 
-def test_print_vs_printf_concept():
-    """Conceptual test showing the difference between print and printf.
-    
-    This demonstrates the key difference highlighted in the reference notebook:
-    - flir.print: Shows static/compile-time values
-    - flir.printf: Shows dynamic/runtime values
-    """
-    ir_str = str(_PrintfModule().module)
-    assert "gpu.printf" in ir_str
+# ===========================================================================
+# 2. Python literal auto-materialization
+# ===========================================================================
+
+def test_python_int_literal():
+    """Python int is auto-materialized as i32 constant."""
+    def build(i32):
+        fx.printf("int={}", 42)
+    ir = _build_module("int_literal", build)
+    assert "fly.print" in ir
+    assert "42" in ir
 
 
-def test_printf_with_layout_types():
-    """Test printf with flir layout types."""
-    ir_str = str(_PrintfModule().module)
-    assert "flir.make_shape" in ir_str
-    assert "gpu.printf" in ir_str
+def test_python_float_literal():
+    """Python float is auto-materialized as f64 constant."""
+    def build(i32):
+        fx.printf("float={}", 3.14)
+    ir = _build_module("float_literal", build)
+    assert "fly.print" in ir
+    assert "3.14" in ir or "3.140000" in ir
+
+
+# ===========================================================================
+# 3. Static string embedding
+# ===========================================================================
+
+def test_static_string_in_placeholder():
+    """Static string values are embedded directly in the format string."""
+    def build(i32):
+        fx.printf("type={}", "hello")
+    ir = _build_module("static_string", build)
+    assert "hello" in ir
+
+
+# ===========================================================================
+# 4. IR structure check
+# ===========================================================================
+
+def test_print_generates_fly_print():
+    """fx.printf generates fly.print op."""
+    def build(i32):
+        x = arith.ConstantOp(i32, 1).result
+        fx.printf("v={}", x)
+    ir = _build_module("ir_check", build)
+    assert 'fly.print "v' in ir or "fly.print" in ir

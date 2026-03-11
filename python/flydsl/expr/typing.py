@@ -287,31 +287,33 @@ class Tensor:
         return f"Tensor({self.value})"
 
     @classmethod
-    def __new_from_ir_values__(cls, values):
+    def __fly_construct__(cls, values):
         return Tensor(values[0])
 
-    def __extract_ir_values__(self):
+    def __fly_values__(self):
         return [self.value]
 
 
 class Stream:
     def __init__(self, value=None):
         self.value = value
+        self._stream_storage = None
 
-    def __ir_types__(self):
+    def __fly_types__(self):
         return [gpu.AsyncTokenType.get()]
 
-    def __c_pointers__(self):
+    def __fly_ptrs__(self):
         if self.value is None:
-            # default nullptr stream
-            return [ctypes.cast(ctypes.pointer(ctypes.c_void_p(0)), ctypes.c_void_p)]
-        return [ctypes.cast(ctypes.pointer(ctypes.c_void_p(self.value.cuda_stream)), ctypes.c_void_p)]
+            self._stream_storage = ctypes.c_void_p(0)
+        else:
+            self._stream_storage = ctypes.c_void_p(self.value.cuda_stream)
+        return [ctypes.cast(ctypes.pointer(self._stream_storage), ctypes.c_void_p)]
 
     @classmethod
-    def __new_from_ir_values__(cls, values):
+    def __fly_construct__(cls, values):
         return Stream(values[0])
 
-    def __extract_ir_values__(self):
+    def __fly_values__(self):
         return [self.value]
 
 

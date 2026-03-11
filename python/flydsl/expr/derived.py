@@ -25,10 +25,10 @@ class Atom:
         self.atom_ty = self.value.type
 
     @classmethod
-    def __new_from_ir_values__(cls, values):
+    def __fly_construct__(cls, values):
         return cls(values[0])
 
-    def __extract_ir_values__(self):
+    def __fly_values__(self):
         return [self.value]
 
 
@@ -38,10 +38,10 @@ class CopyAtom:
         self.atom_ty = self.value.type
 
     @classmethod
-    def __new_from_ir_values__(cls, values):
+    def __fly_construct__(cls, values):
         return cls(values[0])
 
-    def __extract_ir_values__(self):
+    def __fly_values__(self):
         return [self.value]
 
     def __str__(self):
@@ -95,10 +95,10 @@ class TiledCopy:
         self.tiled_copy_ty = self.value.type
 
     @classmethod
-    def __new_from_ir_values__(cls, values):
+    def __fly_construct__(cls, values):
         return cls(values[0])
 
-    def __extract_ir_values__(self):
+    def __fly_values__(self):
         return [self.value]
 
     def __str__(self):
@@ -125,10 +125,10 @@ class TiledMma:
         self.tiled_mma_ty = self.value.type
 
     @classmethod
-    def __new_from_ir_values__(cls, values):
+    def __fly_construct__(cls, values):
         return cls(values[0])
 
-    def __extract_ir_values__(self):
+    def __fly_values__(self):
         return [self.value]
 
     def __str__(self):
@@ -141,15 +141,12 @@ class TiledMma:
         return self.get_slice(thr_idx)
 
     def make_fragment_A(self, a: Tensor):
-        # return tiled_mma_make_fragment(MmaOperand.A, self.value, a)
         return make_fragment_like(a)
 
     def make_fragment_B(self, b: Tensor):
-        # return tiled_mma_make_fragment(MmaOperand.B, self.value, b)
         return make_fragment_like(b)
 
     def make_fragment_C(self, c: Tensor):
-        # return tiled_mma_make_fragment(MmaOperand.C, self.value, c)
         return make_fragment_like(c)
 
     @property

@@ -7,12 +7,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BASE_DIR="$(cd "${REPO_ROOT}/.." && pwd)"
 LLVM_SRC_DIR="$BASE_DIR/llvm-project"
 LLVM_BUILD_DIR="$LLVM_SRC_DIR/build-flydsl"
-LLVM_INSTALL_DIR="${LLVM_INSTALL_DIR:-$LLVM_BUILD_DIR/mlir_install}"
-LLVM_INSTALL_TGZ="${LLVM_INSTALL_TGZ:-$LLVM_BUILD_DIR/mlir_install.tgz}"
+LLVM_INSTALL_DIR="${LLVM_INSTALL_DIR:-$LLVM_SRC_DIR/mlir_install}"
+LLVM_INSTALL_TGZ="${LLVM_INSTALL_TGZ:-$LLVM_SRC_DIR/mlir_install.tgz}"
 LLVM_PACKAGE_INSTALL="${LLVM_PACKAGE_INSTALL:-1}"
 
-# Read LLVM commit hash from cmake/llvm-hash.txt
-LLVM_HASH_FILE="${REPO_ROOT}/cmake/llvm-hash.txt"
+# Read LLVM commit hash from thirdparty/llvm-hash.txt
+LLVM_HASH_FILE="${REPO_ROOT}/thirdparty/llvm-hash.txt"
 if [[ -f "${LLVM_HASH_FILE}" ]]; then
     LLVM_COMMIT_DEFAULT=$(cat "${LLVM_HASH_FILE}" | tr -d '[:space:]')
 else
@@ -85,7 +85,10 @@ cmake -G "$GENERATOR" \
     -DMLIR_ENABLE_ROCM_RUNNER=ON \
     -DMLIR_BINDINGS_PYTHON_NB_DOMAIN=mlir \
     -DPython3_EXECUTABLE=$(which python3) \
-    -Dnanobind_DIR="$NANOBIND_DIR" 
+    -Dnanobind_DIR="$NANOBIND_DIR" \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DLLVM_BUILD_LLVM_DYLIB=OFF \
+    -DLLVM_LINK_LLVM_DYLIB=OFF 
 
 # 4. Build
 PARALLEL_JOBS=$(( $(nproc) / 2 ))
@@ -112,7 +115,12 @@ if [[ "${LLVM_PACKAGE_INSTALL}" == "1" ]]; then
   fi
 
   echo "Creating tarball..."
-  tar -C "$(dirname "${LLVM_INSTALL_DIR}")" -czf "${LLVM_INSTALL_TGZ}" "$(basename "${LLVM_INSTALL_DIR}")"
+  # The install tree may still have files whose mtimes change (e.g. Python bytecode caches),
+  # which can cause GNU tar to exit(1) with "file changed as we read it". Treat those as
+  # non-fatal for packaging.
+  tar --warning=no-file-changed --warning=no-file-removed --ignore-failed-read \
+      -C "$(dirname "${LLVM_INSTALL_DIR}")" \
+      -czf "${LLVM_INSTALL_TGZ}" "$(basename "${LLVM_INSTALL_DIR}")"
 fi
 
 echo "=============================================="
