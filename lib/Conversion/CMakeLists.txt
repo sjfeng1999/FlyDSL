@@ -1,1 +1,2 @@
+add_subdirectory(FlyGpuToLLVM)
 add_subdirectory(FlyToROCDL)

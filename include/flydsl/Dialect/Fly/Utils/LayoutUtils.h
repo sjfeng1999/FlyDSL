@@ -26,6 +26,9 @@ std::pair<IntTuple, IntTuple> canonicalizeStridePair(const IntTupleBuilder<IntTu
     }
     return {shape, stride};
   }
+  if (shape.rank() == 1) {
+    return canonicalizeStridePair(builder, builder.at(shape, 0), builder.at(stride, 0));
+  }
   typename IntTupleBuilder<IntTuple>::ElemCollector shapeElems;
   typename IntTupleBuilder<IntTuple>::ElemCollector strideElems;
   for (int i = 0; i < shape.rank(); ++i) {
