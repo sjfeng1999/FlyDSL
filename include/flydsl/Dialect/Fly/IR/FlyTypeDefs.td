@@ -143,7 +143,9 @@ def Fly_Pointer : Fly_Type<"Pointer", "ptr", []> {
       return $_get(elemTy.getContext(), elemTy, addressSpace, alignment, swizzle);
     }]>
   ];
-  let extraClassDeclaration = [{}];
+  let extraClassDeclaration = [{
+    int32_t getValueDivisibility() const;
+  }];
 }
 
 def Fly_CoordTensor : Fly_Type<"CoordTensor", "coord_tensor", [
@@ -180,6 +182,7 @@ def Fly_MemRef : Fly_Type<"MemRef", "memref", []> {
     MemRefType at(ArrayRef<int32_t> idxs) const;
     
     PointerType getPointerType() const;
+    int32_t getValueDivisibility() const;
   }];
 
   let builders = [
