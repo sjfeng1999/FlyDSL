@@ -83,12 +83,16 @@ ComposedLayoutType ComposedLayoutType::at(ArrayRef<int32_t> idxs) const {
 
 int32_t PointerType::getValueDivisibility() const {
   int32_t bitWidth = getElemTy().getIntOrFloatBitWidth();
-  return getAlignment().getAlignment() * 8 / bitWidth;
+  int32_t alignmentBytes = getAlignment().getAlignment();
+  assert(alignmentBytes * 8 % bitWidth == 0);
+  return alignmentBytes * 8 / bitWidth;
 }
 
 int32_t MemRefType::getValueDivisibility() const {
   int32_t bitWidth = getElemTy().getIntOrFloatBitWidth();
-  return getAlignment().getAlignment() * 8 / bitWidth;
+  int32_t alignmentBytes = getAlignment().getAlignment();
+  assert(alignmentBytes * 8 % bitWidth == 0);
+  return alignmentBytes * 8 / bitWidth;
 }
 
 MemRefType MemRefType::at(int32_t idx) const {

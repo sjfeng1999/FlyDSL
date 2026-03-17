@@ -457,6 +457,10 @@ public:
       rewriter.replaceOp(op, makeViewOp.getLayout());
       return success();
     }
+    if (auto allocaOp = memref.getDefiningOp<MemRefAllocaOp>()) {
+      rewriter.replaceOp(op, allocaOp.getLayout());
+      return success();
+    }
     return failure();
   }
 };
