@@ -1,5 +1,5 @@
-#ifndef FLYDSL_TRANSFORM_H
-#define FLYDSL_TRANSFORM_H
+#ifndef FLYDSL_DIALECT_FLY_TRANSFORMS_PASSES_H
+#define FLYDSL_DIALECT_FLY_TRANSFORMS_PASSES_H
 
 #include "mlir/Pass/Pass.h"
 
@@ -16,4 +16,4 @@ namespace fly {
 } // namespace fly
 } // namespace mlir
 
-#endif // FLY_TRANSFORM_H
+#endif // FLYDSL_DIALECT_FLY_TRANSFORMS_PASSES_H

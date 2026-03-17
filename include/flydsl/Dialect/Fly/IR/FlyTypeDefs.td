@@ -178,6 +178,9 @@ def Fly_MemRef : Fly_Type<"MemRef", "memref", []> {
   let extraClassDeclaration = [{
     MemRefType at(int32_t idx) const;
     MemRefType at(ArrayRef<int32_t> idxs) const;
+    int32_t getValueDivisibility() const;
+    
+    PointerType getPointerType() const;
   }];
 
   let builders = [
