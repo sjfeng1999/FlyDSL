@@ -317,6 +317,20 @@ Layout layoutTiledMmaThrValOperandView(LayoutBuilder<Layout> &builder, MmaAtomTy
                                           atomLayoutThrVal, permutation2D, trgLayout);
 }
 
+LayoutAttr tiledCopyGetTiledTVLayoutSrc(CopyAtomType copyAtom, LayoutAttr tiledLayoutThrVal,
+                                       TileAttr tileMN);
+
+LayoutAttr tiledCopyGetTiledTVLayoutDst(CopyAtomType copyAtom, LayoutAttr tiledLayoutThrVal,
+                                        TileAttr tileMN);
+
+LayoutAttr tiledMmaGetTiledTVLayout(MmaAtomTypeInterface mmaAtom, LayoutAttr atomLayoutMNK,
+                                    TileAttr permutationMNK, MmaOperand operandId);
+
+IntTupleAttr tiledMmaGetTileSizeMNK(MmaAtomTypeInterface mmaAtom, LayoutAttr atomLayoutMNK,
+                                    TileAttr permutationMNK);
+
+LayoutAttr tiledMmaGetThrLayoutVMNK(MmaAtomTypeInterface mmaAtom, LayoutAttr atomLayoutMNK);
+
 } // namespace mlir::fly
 
 #endif // FLYDSL_DIALECT_FLY_UTILS_TILEDOPUTILS_H

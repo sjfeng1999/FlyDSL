@@ -10,15 +10,13 @@
 #include "mlir/Bindings/Python/NanobindAdaptors.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/CAPI/Wrap.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Value.h"
 
-#include <mlir/IR/BuiltinAttributes.h>
-#include <mlir/IR/BuiltinTypes.h>
-#include <mlir/IR/MLIRContext.h>
-#include <mlir/IR/Value.h>
-
-#include "flydsl-c/FlyDialect.h"
 #include "flydsl/Dialect/Fly/IR/FlyDialect.h"
-#include "flydsl/Dialect/Fly/Utils/IntUtils.h"
+#include "flydsl/Dialect/Fly/Utils/TiledOpUtils.h"
 
 #include "DLTensorAdaptor.h"
 
@@ -27,78 +25,86 @@
 
 namespace nb = nanobind;
 using namespace nb::literals;
+using namespace ::mlir;
+using namespace ::mlir::fly;
 
 namespace {
 
+// Unwrap a PyConcreteType to the underlying C++ MLIR type.
+template <typename CppTy, typename PySelf>
+CppTy unwrapSelf(PySelf &self) {
+  return cast<CppTy>(unwrap(static_cast<MlirType>(self)));
+}
+
 struct IntTupleAttrBuilder {
-  ::mlir::MLIRContext *ctx;
+  MLIRContext *ctx;
   std::vector<nb::handle> dyncElems{};
 
-  IntTupleAttrBuilder(::mlir::MLIRContext *ctx) : ctx(ctx) {}
+  IntTupleAttrBuilder(MLIRContext *ctx) : ctx(ctx) {}
 
   void clear() { dyncElems.clear(); }
 
-  ::mlir::fly::IntTupleAttr operator()(nb::handle args) {
+  IntTupleAttr operator()(nb::handle args) {
     if (PyTuple_Check(args.ptr())) {
-      ::mlir::SmallVector<::mlir::Attribute> elements;
+      SmallVector<Attribute> elements;
       for (auto item : args) {
         elements.push_back((*this)(item));
       }
-      return ::mlir::fly::IntTupleAttr::get(::mlir::ArrayAttr::get(ctx, elements));
+      return IntTupleAttr::get(ArrayAttr::get(ctx, elements));
     } else if (PyLong_Check(args.ptr())) {
       int32_t cInt = PyLong_AsLong(args.ptr());
-      return ::mlir::fly::IntTupleAttr::get(::mlir::fly::IntAttr::getStatic(ctx, cInt));
+      return IntTupleAttr::get(IntAttr::getStatic(ctx, cInt));
     } else if (args.is_none()) {
-      return ::mlir::fly::IntTupleAttr::getLeafNone(ctx);
+      return IntTupleAttr::getLeafNone(ctx);
     } else {
       if (!nb::hasattr(args, "_CAPIPtr")) {
         throw std::invalid_argument("Expected I32, got: " +
                                     std::string(nb::str(nb::type_name(args)).c_str()));
       }
       dyncElems.push_back(args);
-      return ::mlir::fly::IntTupleAttr::get(::mlir::fly::IntAttr::getDynamic(ctx));
+      return IntTupleAttr::get(IntAttr::getDynamic(ctx));
     }
   }
 };
 
 int32_t rank(MlirValue int_or_tuple) {
-  ::mlir::Value val = unwrap(int_or_tuple);
-  ::mlir::Type ty = val.getType();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::IntTupleType>(ty))
+  Value val = unwrap(int_or_tuple);
+  Type ty = val.getType();
+  if (auto t = dyn_cast<IntTupleType>(ty))
     return t.getAttr().rank();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::LayoutType>(ty))
+  if (auto t = dyn_cast<LayoutType>(ty))
     return t.getAttr().rank();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::ComposedLayoutType>(ty))
+  if (auto t = dyn_cast<ComposedLayoutType>(ty))
     return t.getAttr().rank();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::CoordTensorType>(ty))
-    return ::mlir::cast<::mlir::fly::NestedAttrInterface>(t.getLayout()).rank();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::MemRefType>(ty))
-    return ::mlir::cast<::mlir::fly::NestedAttrInterface>(t.getLayout()).rank();
+  if (auto t = dyn_cast<CoordTensorType>(ty))
+    return cast<NestedAttrInterface>(t.getLayout()).rank();
+  if (auto t = dyn_cast<fly::MemRefType>(ty))
+    return cast<NestedAttrInterface>(t.getLayout()).rank();
   throw std::invalid_argument("Unsupported type for rank()");
 }
 
 int32_t depth(MlirValue int_or_tuple) {
-  ::mlir::Value val = unwrap(int_or_tuple);
-  ::mlir::Type ty = val.getType();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::IntTupleType>(ty))
+  Value val = unwrap(int_or_tuple);
+  Type ty = val.getType();
+  if (auto t = dyn_cast<IntTupleType>(ty))
     return t.getAttr().depth();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::LayoutType>(ty))
+  if (auto t = dyn_cast<LayoutType>(ty))
     return t.getAttr().depth();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::ComposedLayoutType>(ty))
+  if (auto t = dyn_cast<ComposedLayoutType>(ty))
     return t.getAttr().depth();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::CoordTensorType>(ty))
-    return ::mlir::cast<::mlir::fly::NestedAttrInterface>(t.getLayout()).depth();
-  if (auto t = ::mlir::dyn_cast<::mlir::fly::MemRefType>(ty))
-    return ::mlir::cast<::mlir::fly::NestedAttrInterface>(t.getLayout()).depth();
+  if (auto t = dyn_cast<CoordTensorType>(ty))
+    return cast<NestedAttrInterface>(t.getLayout()).depth();
+  if (auto t = dyn_cast<fly::MemRefType>(ty))
+    return cast<NestedAttrInterface>(t.getLayout()).depth();
   throw std::invalid_argument("Unsupported type for depth()");
 }
 
 /// Convert nb::handle (Python int|tuple|IntTupleType) to IntTupleAttr.
-::mlir::fly::IntTupleAttr toIntTupleAttr(nb::handle h, ::mlir::MLIRContext *ctx) {
+IntTupleAttr toIntTupleAttr(nb::handle h, MLIRContext *ctx) {
   if (nb::hasattr(h, MLIR_PYTHON_CAPI_PTR_ATTR)) {
     auto capsule = nb::cast<nb::capsule>(h.attr(MLIR_PYTHON_CAPI_PTR_ATTR));
     MlirType mlirTy = mlirPythonCapsuleToType(capsule.ptr());
-    auto intTupleType = ::mlir::dyn_cast<::mlir::fly::IntTupleType>(unwrap(mlirTy));
+    auto intTupleType = dyn_cast<IntTupleType>(unwrap(mlirTy));
     if (!intTupleType)
       throw std::invalid_argument("Expected IntTupleType, got other MlirType");
     return intTupleType.getAttr();
@@ -113,6 +119,14 @@ int32_t depth(MlirValue int_or_tuple) {
 // PyConcreteType definitions in the MLIR Python domain
 // =============================================================================
 
+// Generate isaFunction / getTypeIdFunction lambdas for PyConcreteType.
+// Must use fully-qualified names because we are inside mlir::python::mlir::fly.
+#define FLY_ISA_AND_TYPEID(CppType)                                                                \
+  static constexpr IsAFunctionTy isaFunction =                                                     \
+      +[](MlirType type) { return ::mlir::isa<CppType>(unwrap(type)); };                          \
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =                                         \
+      +[]() { return wrap(CppType::getTypeID()); }
+
 namespace mlir {
 namespace python {
 namespace MLIR_BINDINGS_PYTHON_DOMAIN {
@@ -122,8 +136,7 @@ namespace fly {
 // IntTupleType
 // ---------------------------------------------------------------------------
 struct PyIntTupleType : PyConcreteType<PyIntTupleType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyIntTupleType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyIntTupleTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::IntTupleType);
   static constexpr const char *pyClassName = "IntTupleType";
   using Base::Base;
 
@@ -131,10 +144,10 @@ struct PyIntTupleType : PyConcreteType<PyIntTupleType> {
     c.def_static(
         "get",
         [](nb::handle int_or_tuple, DefaultingPyMlirContext context) {
-          ::mlir::MLIRContext *ctx = unwrap(context.get()->get());
+          MLIRContext *ctx = unwrap(context.get()->get());
           IntTupleAttrBuilder builder{ctx};
           auto attr = builder(int_or_tuple);
-          return PyIntTupleType(context->getRef(), wrap(::mlir::fly::IntTupleType::get(attr)));
+          return PyIntTupleType(context->getRef(), wrap(IntTupleType::get(attr)));
         },
         "int_or_tuple"_a, nb::kw_only(), "context"_a = nb::none(),
         // clang-format off
@@ -143,15 +156,17 @@ struct PyIntTupleType : PyConcreteType<PyIntTupleType> {
         "Create an IntTupleType from Python int or tuple");
 
     c.def_prop_ro("rank",
-                  [](PyIntTupleType &self) -> int32_t { return mlirFlyIntTupleTypeGetRank(self); });
-    c.def_prop_ro(
-        "depth", [](PyIntTupleType &self) -> int32_t { return mlirFlyIntTupleTypeGetDepth(self); });
+                  [](PyIntTupleType &self) { return unwrapSelf<IntTupleType>(self).rank(); });
+    c.def_prop_ro("depth",
+                  [](PyIntTupleType &self) { return unwrapSelf<IntTupleType>(self).depth(); });
     c.def_prop_ro("is_leaf",
-                  [](PyIntTupleType &self) -> bool { return mlirFlyIntTupleTypeIsLeaf(self); });
+                  [](PyIntTupleType &self) { return unwrapSelf<IntTupleType>(self).isLeaf(); });
     c.def_prop_ro("is_static",
-                  [](PyIntTupleType &self) -> bool { return mlirFlyIntTupleTypeIsStatic(self); });
-    c.def_prop_ro("static_value", [](PyIntTupleType &self) -> int32_t {
-      return mlirFlyIntTupleTypeGetStaticValue(self);
+                  [](PyIntTupleType &self) { return unwrapSelf<IntTupleType>(self).isStatic(); });
+    c.def_prop_ro("static_value", [](PyIntTupleType &self) {
+      auto ty = unwrapSelf<IntTupleType>(self);
+      assert(ty.isLeaf() && ty.isStatic());
+      return ty.getAttr().getLeafAsInt().getValue();
     });
   }
 };
@@ -160,8 +175,7 @@ struct PyIntTupleType : PyConcreteType<PyIntTupleType> {
 // LayoutType
 // ---------------------------------------------------------------------------
 struct PyLayoutType : PyConcreteType<PyLayoutType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyLayoutType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyLayoutTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::LayoutType);
   static constexpr const char *pyClassName = "LayoutType";
   using Base::Base;
 
@@ -169,31 +183,34 @@ struct PyLayoutType : PyConcreteType<PyLayoutType> {
     c.def_static(
         "get",
         [](nb::handle shape, nb::handle stride, DefaultingPyMlirContext context) {
-          ::mlir::MLIRContext *ctx = unwrap(context.get()->get());
+          MLIRContext *ctx = unwrap(context.get()->get());
           auto shapeAttr = toIntTupleAttr(shape, ctx);
           auto strideAttr = toIntTupleAttr(stride, ctx);
-          auto layoutAttr = ::mlir::fly::LayoutAttr::get(ctx, shapeAttr, strideAttr);
-          return PyLayoutType(context->getRef(), wrap(::mlir::fly::LayoutType::get(layoutAttr)));
+          auto layoutAttr = LayoutAttr::get(ctx, shapeAttr, strideAttr);
+          return PyLayoutType(context->getRef(), wrap(LayoutType::get(layoutAttr)));
         },
         "shape"_a, "stride"_a, nb::kw_only(), "context"_a = nb::none(),
         "Create a LayoutType with shape and stride");
 
-    c.def_prop_ro("shape",
-                  [](PyLayoutType &self) -> MlirType { return mlirFlyLayoutTypeGetShape(self); });
-    c.def_prop_ro("stride",
-                  [](PyLayoutType &self) -> MlirType { return mlirFlyLayoutTypeGetStride(self); });
+    c.def_prop_ro("shape", [](PyLayoutType &self) -> MlirType {
+      return wrap(IntTupleType::get(unwrapSelf<LayoutType>(self).getAttr().getShape()));
+    });
+    c.def_prop_ro("stride", [](PyLayoutType &self) -> MlirType {
+      return wrap(IntTupleType::get(unwrapSelf<LayoutType>(self).getAttr().getStride()));
+    });
     c.def_prop_ro("rank",
-                  [](PyLayoutType &self) -> int32_t { return mlirFlyLayoutTypeGetRank(self); });
+                  [](PyLayoutType &self) { return unwrapSelf<LayoutType>(self).rank(); });
     c.def_prop_ro("depth",
-                  [](PyLayoutType &self) -> int32_t { return mlirFlyLayoutTypeGetDepth(self); });
+                  [](PyLayoutType &self) { return unwrapSelf<LayoutType>(self).depth(); });
     c.def_prop_ro("is_leaf",
-                  [](PyLayoutType &self) -> bool { return mlirFlyLayoutTypeIsLeaf(self); });
+                  [](PyLayoutType &self) { return unwrapSelf<LayoutType>(self).isLeaf(); });
     c.def_prop_ro("is_static",
-                  [](PyLayoutType &self) -> bool { return mlirFlyLayoutTypeIsStatic(self); });
+                  [](PyLayoutType &self) { return unwrapSelf<LayoutType>(self).isStatic(); });
     c.def_prop_ro("is_static_shape",
-                  [](PyLayoutType &self) -> bool { return mlirFlyLayoutTypeIsStaticShape(self); });
-    c.def_prop_ro("is_static_stride",
-                  [](PyLayoutType &self) -> bool { return mlirFlyLayoutTypeIsStaticStride(self); });
+                  [](PyLayoutType &self) { return unwrapSelf<LayoutType>(self).isStaticShape(); });
+    c.def_prop_ro("is_static_stride", [](PyLayoutType &self) {
+      return unwrapSelf<LayoutType>(self).isStaticStride();
+    });
   }
 };
 
@@ -201,8 +218,7 @@ struct PyLayoutType : PyConcreteType<PyLayoutType> {
 // SwizzleType
 // ---------------------------------------------------------------------------
 struct PySwizzleType : PyConcreteType<PySwizzleType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlySwizzleType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlySwizzleTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::SwizzleType);
   static constexpr const char *pyClassName = "SwizzleType";
   using Base::Base;
 
@@ -210,19 +226,22 @@ struct PySwizzleType : PyConcreteType<PySwizzleType> {
     c.def_static(
         "get",
         [](int32_t mask, int32_t base, int32_t shift, DefaultingPyMlirContext context) {
-          ::mlir::MLIRContext *ctx = unwrap(context.get()->get());
-          auto attr = ::mlir::fly::SwizzleAttr::get(ctx, mask, base, shift);
-          return PySwizzleType(context->getRef(), wrap(::mlir::fly::SwizzleType::get(attr)));
+          MLIRContext *ctx = unwrap(context.get()->get());
+          auto attr = SwizzleAttr::get(ctx, mask, base, shift);
+          return PySwizzleType(context->getRef(), wrap(SwizzleType::get(attr)));
         },
         "mask"_a, "base"_a, "shift"_a, nb::kw_only(), "context"_a = nb::none(),
         "Create a SwizzleType");
 
-    c.def_prop_ro("mask",
-                  [](PySwizzleType &self) -> int32_t { return mlirFlySwizzleTypeGetMask(self); });
-    c.def_prop_ro("base",
-                  [](PySwizzleType &self) -> int32_t { return mlirFlySwizzleTypeGetBase(self); });
-    c.def_prop_ro("shift",
-                  [](PySwizzleType &self) -> int32_t { return mlirFlySwizzleTypeGetShift(self); });
+    c.def_prop_ro("mask", [](PySwizzleType &self) {
+      return unwrapSelf<SwizzleType>(self).getAttr().getMask();
+    });
+    c.def_prop_ro("base", [](PySwizzleType &self) {
+      return unwrapSelf<SwizzleType>(self).getAttr().getBase();
+    });
+    c.def_prop_ro("shift", [](PySwizzleType &self) {
+      return unwrapSelf<SwizzleType>(self).getAttr().getShift();
+    });
   }
 };
 
@@ -230,8 +249,7 @@ struct PySwizzleType : PyConcreteType<PySwizzleType> {
 // PointerType
 // ---------------------------------------------------------------------------
 struct PyPointerType : PyConcreteType<PyPointerType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyPointerType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyPointerTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::PointerType);
   static constexpr const char *pyClassName = "PointerType";
   using Base::Base;
 
@@ -240,16 +258,15 @@ struct PyPointerType : PyConcreteType<PyPointerType> {
         "get",
         [](PyType &elemTyObj, std::optional<int32_t> addressSpace, std::optional<int32_t> alignment,
            DefaultingPyMlirContext context) {
-          ::mlir::MLIRContext *ctx = unwrap(context.get()->get());
-          MlirType elemTy = elemTyObj;
+          MLIRContext *ctx = unwrap(context.get()->get());
+          auto elemType = unwrap(static_cast<MlirType>(elemTyObj));
 
-          auto addr = ::mlir::fly::AddressSpace::Register;
+          auto addr = AddressSpace::Register;
           if (addressSpace.has_value())
-            addr = static_cast<::mlir::fly::AddressSpace>(addressSpace.value());
+            addr = static_cast<AddressSpace>(addressSpace.value());
 
-          auto elemType = unwrap(elemTy);
-          int32_t alignSize = alignment.value_or(
-              ::mlir::fly::AlignAttr::getTrivialAlignment(elemType).getAlignment());
+          int32_t alignSize =
+              alignment.value_or(AlignAttr::getTrivialAlignment(elemType).getAlignment());
           int32_t elemByte = (elemType.getIntOrFloatBitWidth() + 7) / 8;
           if (alignSize <= 0 || alignSize % elemByte != 0)
             throw std::invalid_argument(
@@ -257,24 +274,23 @@ struct PyPointerType : PyConcreteType<PyPointerType> {
                 std::to_string(elemByte) + "), got " + std::to_string(alignSize));
 
           return PyPointerType(context->getRef(),
-                               wrap(::mlir::fly::PointerType::get(
-                                   elemType, ::mlir::fly::AddressSpaceAttr::get(ctx, addr),
-                                   ::mlir::fly::AlignAttr::get(ctx, alignSize))));
+                               wrap(PointerType::get(elemType, AddressSpaceAttr::get(ctx, addr),
+                                                     AlignAttr::get(ctx, alignSize))));
         },
         "elem_ty"_a, "address_space"_a = nb::none(), "alignment"_a = nb::none(), nb::kw_only(),
         "context"_a = nb::none(), "Create a PointerType with element type and address space");
 
     c.def_prop_ro("element_type", [](PyPointerType &self) -> MlirType {
-      return mlirFlyPointerTypeGetElementType(self);
+      return wrap(unwrapSelf<PointerType>(self).getElemTy());
     });
     c.def_prop_ro("address_space", [](PyPointerType &self) -> int32_t {
-      return mlirFlyPointerTypeGetAddressSpace(self);
+      return static_cast<int32_t>(unwrapSelf<PointerType>(self).getAddressSpace().getValue());
     });
     c.def_prop_ro("alignment", [](PyPointerType &self) -> int32_t {
-      return mlirFlyPointerTypeGetAlignment(self);
+      return unwrapSelf<PointerType>(self).getAlignment().getAlignment();
     });
     c.def_prop_ro("swizzle", [](PyPointerType &self) -> MlirType {
-      return mlirFlyPointerTypeGetSwizzle(self);
+      return wrap(SwizzleType::get(unwrapSelf<PointerType>(self).getSwizzle()));
     });
   }
 };
@@ -283,8 +299,7 @@ struct PyPointerType : PyConcreteType<PyPointerType> {
 // MemRefType
 // ---------------------------------------------------------------------------
 struct PyMemRefType : PyConcreteType<PyMemRefType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyMemRefType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyMemRefTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::MemRefType);
   static constexpr const char *pyClassName = "MemRefType";
   using Base::Base;
 
@@ -293,20 +308,19 @@ struct PyMemRefType : PyConcreteType<PyMemRefType> {
         "get",
         [](PyType &elemTyObj, PyType &layoutObj, std::optional<int32_t> addressSpace,
            std::optional<int32_t> alignment, DefaultingPyMlirContext context) {
-          ::mlir::MLIRContext *ctx = unwrap(context.get()->get());
-          MlirType layoutMlirTy = layoutObj;
-          auto layoutType = ::mlir::dyn_cast<::mlir::fly::LayoutType>(unwrap(layoutMlirTy));
+          MLIRContext *ctx = unwrap(context.get()->get());
+          auto layoutType =
+              ::mlir::dyn_cast<LayoutType>(unwrap(static_cast<MlirType>(layoutObj)));
           if (!layoutType)
             throw std::invalid_argument("layout must be a LayoutType");
 
-          auto addr = ::mlir::fly::AddressSpace::Register;
+          auto addr = AddressSpace::Register;
           if (addressSpace.has_value())
-            addr = static_cast<::mlir::fly::AddressSpace>(addressSpace.value());
+            addr = static_cast<AddressSpace>(addressSpace.value());
 
-          MlirType elemTy = elemTyObj;
-          auto elemType = unwrap(elemTy);
-          int32_t alignSize = alignment.value_or(
-              ::mlir::fly::AlignAttr::getTrivialAlignment(elemType).getAlignment());
+          auto elemType = unwrap(static_cast<MlirType>(elemTyObj));
+          int32_t alignSize =
+              alignment.value_or(AlignAttr::getTrivialAlignment(elemType).getAlignment());
           int32_t elemByte = (elemType.getIntOrFloatBitWidth() + 7) / 8;
           if (alignSize <= 0 || alignSize % elemByte != 0)
             throw std::invalid_argument(
@@ -315,9 +329,9 @@ struct PyMemRefType : PyConcreteType<PyMemRefType> {
 
           return PyMemRefType(
               context->getRef(),
-              wrap(::mlir::fly::MemRefType::get(
-                  elemType, ::mlir::fly::AddressSpaceAttr::get(ctx, addr), layoutType.getAttr(),
-                  ::mlir::fly::AlignAttr::get(ctx, alignSize))));
+              wrap(::mlir::fly::MemRefType::get(elemType, AddressSpaceAttr::get(ctx, addr),
+                                                   layoutType.getAttr(),
+                                                   AlignAttr::get(ctx, alignSize))));
         },
         "elem_ty"_a, "layout"_a, "address_space"_a = 0, "alignment"_a = nb::none(), nb::kw_only(),
         "context"_a = nb::none(),
@@ -325,18 +339,25 @@ struct PyMemRefType : PyConcreteType<PyMemRefType> {
         "alignment");
 
     c.def_prop_ro("element_type", [](PyMemRefType &self) -> MlirType {
-      return mlirFlyMemRefTypeGetElementType(self);
+      return wrap(unwrapSelf<::mlir::fly::MemRefType>(self).getElemTy());
     });
-    c.def_prop_ro("layout",
-                  [](PyMemRefType &self) -> MlirType { return mlirFlyMemRefTypeGetLayout(self); });
+    c.def_prop_ro("layout", [](PyMemRefType &self) -> MlirType {
+      auto memrefType = unwrapSelf<::mlir::fly::MemRefType>(self);
+      ::mlir::Attribute layout = memrefType.getLayout();
+      if (auto la = ::mlir::dyn_cast<LayoutAttr>(layout))
+        return wrap(LayoutType::get(la));
+      return wrap(ComposedLayoutType::get(::mlir::cast<ComposedLayoutAttr>(layout)));
+    });
     c.def_prop_ro("address_space", [](PyMemRefType &self) -> int32_t {
-      return mlirFlyMemRefTypeGetAddressSpace(self);
+      return static_cast<int32_t>(
+          unwrapSelf<::mlir::fly::MemRefType>(self).getAddressSpace().getValue());
     });
     c.def_prop_ro("alignment", [](PyMemRefType &self) -> int32_t {
-      return mlirFlyMemRefTypeGetAlignment(self);
+      return unwrapSelf<::mlir::fly::MemRefType>(self).getAlignment().getAlignment();
     });
-    c.def_prop_ro("swizzle",
-                  [](PyMemRefType &self) -> MlirType { return mlirFlyMemRefTypeGetSwizzle(self); });
+    c.def_prop_ro("swizzle", [](PyMemRefType &self) -> MlirType {
+      return wrap(SwizzleType::get(unwrapSelf<::mlir::fly::MemRefType>(self).getSwizzle()));
+    });
   }
 };
 
@@ -344,8 +365,7 @@ struct PyMemRefType : PyConcreteType<PyMemRefType> {
 // CopyOpUniversalCopyType
 // ---------------------------------------------------------------------------
 struct PyCopyOpUniversalCopyType : PyConcreteType<PyCopyOpUniversalCopyType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyCopyOpUniversalCopyType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyCopyOpUniversalCopyTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::CopyOpUniversalCopyType);
   static constexpr const char *pyClassName = "CopyOpUniversalCopyType";
   using Base::Base;
 
@@ -353,15 +373,15 @@ struct PyCopyOpUniversalCopyType : PyConcreteType<PyCopyOpUniversalCopyType> {
     c.def_static(
         "get",
         [](int32_t bitSize, DefaultingPyMlirContext context) {
-          ::mlir::MLIRContext *ctx = unwrap(context.get()->get());
-          return PyCopyOpUniversalCopyType(
-              context->getRef(), wrap(::mlir::fly::CopyOpUniversalCopyType::get(ctx, bitSize)));
+          MLIRContext *ctx = unwrap(context.get()->get());
+          return PyCopyOpUniversalCopyType(context->getRef(),
+                                           wrap(CopyOpUniversalCopyType::get(ctx, bitSize)));
         },
         "bitSize"_a, nb::kw_only(), "context"_a = nb::none(),
         "Create a CopyOpUniversalCopyType with bit size");
 
-    c.def_prop_ro("bit_size", [](PyCopyOpUniversalCopyType &self) -> int32_t {
-      return mlirFlyCopyOpUniversalCopyTypeGetBitSize(self);
+    c.def_prop_ro("bit_size", [](PyCopyOpUniversalCopyType &self) {
+      return unwrapSelf<CopyOpUniversalCopyType>(self).getBitSize();
     });
   }
 };
@@ -370,8 +390,7 @@ struct PyCopyOpUniversalCopyType : PyConcreteType<PyCopyOpUniversalCopyType> {
 // CopyAtomType
 // ---------------------------------------------------------------------------
 struct PyCopyAtomType : PyConcreteType<PyCopyAtomType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyCopyAtomType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyCopyAtomTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::CopyAtomType);
   static constexpr const char *pyClassName = "CopyAtomType";
   using Base::Base;
 
@@ -379,27 +398,32 @@ struct PyCopyAtomType : PyConcreteType<PyCopyAtomType> {
     c.def_static(
         "get",
         [](PyType &copyOp, int32_t valBits) {
-          return PyCopyAtomType(copyOp.getContext(), mlirFlyCopyAtomTypeGet(copyOp, valBits));
+          return PyCopyAtomType(copyOp.getContext(),
+                                wrap(CopyAtomType::get(unwrap(static_cast<MlirType>(copyOp)),
+                                                       valBits)));
         },
         "copy_op"_a, "val_bits"_a,
         "Create a CopyAtomType with the given copy op type and value bits");
+
     c.def_prop_ro("copy_op", [](PyCopyAtomType &self) -> MlirType {
-      return mlirFlyCopyAtomTypeGetCopyOp(self);
+      return wrap(unwrapSelf<CopyAtomType>(self).getCopyOp());
     });
-    c.def_prop_ro("val_bits", [](PyCopyAtomType &self) -> int32_t {
-      return mlirFlyCopyAtomTypeGetValBits(self);
-    });
+    c.def_prop_ro("val_bits",
+                  [](PyCopyAtomType &self) { return unwrapSelf<CopyAtomType>(self).getValBits(); });
     c.def_prop_ro("thr_layout", [](PyCopyAtomType &self) -> MlirType {
-      return mlirFlyCopyAtomTypeGetThrLayout(self);
+      return wrap(LayoutType::get(cast<LayoutAttr>(unwrapSelf<CopyAtomType>(self).getThrLayout())));
     });
     c.def_prop_ro("tv_layout_src", [](PyCopyAtomType &self) -> MlirType {
-      return mlirFlyCopyAtomTypeGetThrValLayoutSrc(self);
+      return wrap(
+          LayoutType::get(cast<LayoutAttr>(unwrapSelf<CopyAtomType>(self).getThrValLayoutSrc())));
     });
     c.def_prop_ro("tv_layout_dst", [](PyCopyAtomType &self) -> MlirType {
-      return mlirFlyCopyAtomTypeGetThrValLayoutDst(self);
+      return wrap(
+          LayoutType::get(cast<LayoutAttr>(unwrapSelf<CopyAtomType>(self).getThrValLayoutDst())));
     });
     c.def_prop_ro("tv_layout_ref", [](PyCopyAtomType &self) -> MlirType {
-      return mlirFlyCopyAtomTypeGetThrValLayoutRef(self);
+      return wrap(
+          LayoutType::get(cast<LayoutAttr>(unwrapSelf<CopyAtomType>(self).getThrValLayoutRef())));
     });
   }
 };
@@ -408,8 +432,7 @@ struct PyCopyAtomType : PyConcreteType<PyCopyAtomType> {
 // MmaAtomUniversalFMAType
 // ---------------------------------------------------------------------------
 struct PyMmaAtomUniversalFMAType : PyConcreteType<PyMmaAtomUniversalFMAType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyMmaAtomUniversalFMAType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyMmaAtomUniversalFMATypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::MmaAtomUniversalFMAType);
   static constexpr const char *pyClassName = "MmaAtomUniversalFMAType";
   using Base::Base;
 
@@ -417,105 +440,119 @@ struct PyMmaAtomUniversalFMAType : PyConcreteType<PyMmaAtomUniversalFMAType> {
     c.def_static(
         "get",
         [](PyType &elemTyObj, DefaultingPyMlirContext context) {
-          MlirType elemTy = elemTyObj;
           return PyMmaAtomUniversalFMAType(
-              context->getRef(), wrap(::mlir::fly::MmaAtomUniversalFMAType::get(unwrap(elemTy))));
+              context->getRef(),
+              wrap(MmaAtomUniversalFMAType::get(unwrap(static_cast<MlirType>(elemTyObj)))));
         },
         "elem_ty"_a, nb::kw_only(), "context"_a = nb::none(),
         "Create a MmaAtomUniversalFMAType with element type");
 
     c.def_prop_ro("elem_ty", [](PyMmaAtomUniversalFMAType &self) -> MlirType {
-      return mlirFlyMmaAtomUniversalFMATypeGetElemTy(self);
+      return wrap(unwrapSelf<MmaAtomUniversalFMAType>(self).getElemTy());
     });
-
     c.def_prop_ro("thr_layout", [](PyMmaAtomUniversalFMAType &self) -> MlirType {
-      auto ty =
-          ::mlir::cast<::mlir::fly::MmaAtomTypeInterface>(unwrap(static_cast<MlirType>(self)));
-      auto attr = ::mlir::cast<::mlir::fly::LayoutAttr>(ty.getThrLayout());
-      return wrap(::mlir::fly::LayoutType::get(attr));
+      auto ty = unwrapSelf<MmaAtomTypeInterface>(self);
+      return wrap(LayoutType::get(cast<LayoutAttr>(ty.getThrLayout())));
     });
     c.def_prop_ro("shape_mnk", [](PyMmaAtomUniversalFMAType &self) -> MlirType {
-      auto ty =
-          ::mlir::cast<::mlir::fly::MmaAtomTypeInterface>(unwrap(static_cast<MlirType>(self)));
-      auto attr = ::mlir::cast<::mlir::fly::IntTupleAttr>(ty.getShapeMNK());
-      return wrap(::mlir::fly::IntTupleType::get(attr));
+      auto ty = unwrapSelf<MmaAtomTypeInterface>(self);
+      return wrap(IntTupleType::get(cast<IntTupleAttr>(ty.getShapeMNK())));
     });
     c.def_prop_ro("tv_layout_a", [](PyMmaAtomUniversalFMAType &self) -> MlirType {
-      auto ty =
-          ::mlir::cast<::mlir::fly::MmaAtomTypeInterface>(unwrap(static_cast<MlirType>(self)));
-      auto attr = ::mlir::cast<::mlir::fly::LayoutAttr>(ty.getThrValLayoutA());
-      return wrap(::mlir::fly::LayoutType::get(attr));
+      auto ty = unwrapSelf<MmaAtomTypeInterface>(self);
+      return wrap(LayoutType::get(cast<LayoutAttr>(ty.getThrValLayoutA())));
     });
     c.def_prop_ro("tv_layout_b", [](PyMmaAtomUniversalFMAType &self) -> MlirType {
-      auto ty =
-          ::mlir::cast<::mlir::fly::MmaAtomTypeInterface>(unwrap(static_cast<MlirType>(self)));
-      auto attr = ::mlir::cast<::mlir::fly::LayoutAttr>(ty.getThrValLayoutB());
-      return wrap(::mlir::fly::LayoutType::get(attr));
+      auto ty = unwrapSelf<MmaAtomTypeInterface>(self);
+      return wrap(LayoutType::get(cast<LayoutAttr>(ty.getThrValLayoutB())));
     });
     c.def_prop_ro("tv_layout_c", [](PyMmaAtomUniversalFMAType &self) -> MlirType {
-      auto ty =
-          ::mlir::cast<::mlir::fly::MmaAtomTypeInterface>(unwrap(static_cast<MlirType>(self)));
-      auto attr = ::mlir::cast<::mlir::fly::LayoutAttr>(ty.getThrValLayoutC());
-      return wrap(::mlir::fly::LayoutType::get(attr));
+      auto ty = unwrapSelf<MmaAtomTypeInterface>(self);
+      return wrap(LayoutType::get(cast<LayoutAttr>(ty.getThrValLayoutC())));
     });
   }
 };
 
 struct PyTiledCopyType : PyConcreteType<PyTiledCopyType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyTiledCopyType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyTiledCopyTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::TiledCopyType);
   static constexpr const char *pyClassName = "TiledCopyType";
   using Base::Base;
 
   static void bindDerived(ClassTy &c) {
     c.def_prop_ro("copy_atom", [](PyTiledCopyType &self) -> MlirType {
-      return mlirFlyTiledCopyTypeGetCopyAtom(self);
+      return wrap(unwrapSelf<TiledCopyType>(self).getCopyAtom());
     });
     c.def_prop_ro("layout_thr_val", [](PyTiledCopyType &self) -> MlirType {
-      return mlirFlyTiledCopyTypeGetLayoutThrVal(self);
+      return wrap(static_cast<Type>(unwrapSelf<TiledCopyType>(self).getLayoutThrVal()));
     });
     c.def_prop_ro("tile_mn", [](PyTiledCopyType &self) -> MlirType {
-      return mlirFlyTiledCopyTypeGetTileMN(self);
+      return wrap(static_cast<Type>(unwrapSelf<TiledCopyType>(self).getTileMN()));
     });
     c.def_prop_ro("tiled_tv_layout_src", [](PyTiledCopyType &self) -> MlirType {
-      return mlirFlyTiledCopyTypeGetTiledTVLayoutSrc(self);
+      auto ty = unwrapSelf<TiledCopyType>(self);
+      auto copyAtom = cast<CopyAtomType>(ty.getCopyAtom());
+      auto result = tiledCopyGetTiledTVLayoutSrc(
+          copyAtom, ty.getLayoutThrVal().getAttr(), ty.getTileMN().getAttr());
+      return wrap(LayoutType::get(result));
     });
     c.def_prop_ro("tiled_tv_layout_dst", [](PyTiledCopyType &self) -> MlirType {
-      return mlirFlyTiledCopyTypeGetTiledTVLayoutDst(self);
+      auto ty = unwrapSelf<TiledCopyType>(self);
+      auto copyAtom = cast<CopyAtomType>(ty.getCopyAtom());
+      auto result = tiledCopyGetTiledTVLayoutDst(
+          copyAtom, ty.getLayoutThrVal().getAttr(), ty.getTileMN().getAttr());
+      return wrap(LayoutType::get(result));
     });
   }
 };
 
 struct PyTiledMmaType : PyConcreteType<PyTiledMmaType> {
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFlyTiledMmaType;
-  static constexpr GetTypeIDFunctionTy getTypeIdFunction = mlirFlyTiledMmaTypeGetTypeID;
+  FLY_ISA_AND_TYPEID(::mlir::fly::TiledMmaType);
   static constexpr const char *pyClassName = "TiledMmaType";
   using Base::Base;
 
   static void bindDerived(ClassTy &c) {
     c.def_prop_ro("mma_atom", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetMmaAtom(self);
+      return wrap(unwrapSelf<TiledMmaType>(self).getMmaAtom());
     });
     c.def_prop_ro("atom_layout", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetAtomLayout(self);
+      return wrap(static_cast<Type>(unwrapSelf<TiledMmaType>(self).getAtomLayout()));
     });
     c.def_prop_ro("permutation", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetPermutation(self);
+      return wrap(static_cast<Type>(unwrapSelf<TiledMmaType>(self).getPermutation()));
     });
     c.def_prop_ro("tile_size_mnk", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetTileSizeMNK(self);
+      auto ty = unwrapSelf<TiledMmaType>(self);
+      auto mmaAtom = cast<MmaAtomTypeInterface>(ty.getMmaAtom());
+      auto result = tiledMmaGetTileSizeMNK(
+          mmaAtom, ty.getAtomLayout().getAttr(), ty.getPermutation().getAttr());
+      return wrap(IntTupleType::get(result));
     });
     c.def_prop_ro("thr_layout_vmnk", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetThrLayoutVMNK(self);
+      auto ty = unwrapSelf<TiledMmaType>(self);
+      auto mmaAtom = cast<MmaAtomTypeInterface>(ty.getMmaAtom());
+      auto result = tiledMmaGetThrLayoutVMNK(mmaAtom, ty.getAtomLayout().getAttr());
+      return wrap(LayoutType::get(result));
     });
     c.def_prop_ro("tiled_tv_layout_a", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetTiledTVLayoutA(self);
+      auto ty = unwrapSelf<TiledMmaType>(self);
+      auto mmaAtom = cast<MmaAtomTypeInterface>(ty.getMmaAtom());
+      auto result = tiledMmaGetTiledTVLayout(
+          mmaAtom, ty.getAtomLayout().getAttr(), ty.getPermutation().getAttr(), MmaOperand::A);
+      return wrap(LayoutType::get(result));
     });
     c.def_prop_ro("tiled_tv_layout_b", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetTiledTVLayoutB(self);
+      auto ty = unwrapSelf<TiledMmaType>(self);
+      auto mmaAtom = cast<MmaAtomTypeInterface>(ty.getMmaAtom());
+      auto result = tiledMmaGetTiledTVLayout(
+          mmaAtom, ty.getAtomLayout().getAttr(), ty.getPermutation().getAttr(), MmaOperand::B);
+      return wrap(LayoutType::get(result));
     });
     c.def_prop_ro("tiled_tv_layout_c", [](PyTiledMmaType &self) -> MlirType {
-      return mlirFlyTiledMmaTypeGetTiledTVLayoutC(self);
+      auto ty = unwrapSelf<TiledMmaType>(self);
+      auto mmaAtom = cast<MmaAtomTypeInterface>(ty.getMmaAtom());
+      auto result = tiledMmaGetTiledTVLayout(
+          mmaAtom, ty.getAtomLayout().getAttr(), ty.getPermutation().getAttr(), MmaOperand::C);
+      return wrap(LayoutType::get(result));
     });
   }
 };
@@ -565,10 +602,10 @@ NB_MODULE(_fly, m) {
   m.def(
       "infer_int_tuple_type",
       [](nb::handle int_or_tuple, MlirContext context) {
-        ::mlir::MLIRContext *ctx = unwrap(context);
+        MLIRContext *ctx = unwrap(context);
         IntTupleAttrBuilder builder{ctx};
         auto attr = builder(int_or_tuple);
-        return std::make_pair(wrap(::mlir::fly::IntTupleType::get(attr)), builder.dyncElems);
+        return std::make_pair(wrap(IntTupleType::get(attr)), builder.dyncElems);
       },
       "int_or_tuple"_a, "context"_a = nb::none(),
       // clang-format off
