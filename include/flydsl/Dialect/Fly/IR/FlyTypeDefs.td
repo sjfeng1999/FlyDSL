@@ -259,6 +259,11 @@ def Fly_CopyAtom : Fly_Type<"CopyAtom", "copy_atom", [
     ::mlir::LogicalResult emitAtomCall(OpBuilder &builder, Location loc, Type copyAtomTy,
                                        Type srcMemTy, Type dstMemTy, Type predMemTy, Value atomVal, Value src, Value dst,
                                        Value pred) const;
+                                       
+    bool isStateful() const;
+    ::mlir::Type getConvertedType(::mlir::MLIRContext *ctx) const;
+    ::mlir::Value setAtomState(OpBuilder &builder, Location loc, Value atomStruct,
+                               Attribute fieldAttr, Value fieldValue) const;
   }];
 
   let builders = [
@@ -289,6 +294,11 @@ def Fly_MmaAtom : Fly_Type<"MmaAtom", "mma_atom", [
     ::mlir::LogicalResult emitAtomCall(OpBuilder &builder, Location loc, Type mmaAtomTy,
                                        Type dMemTy, Type aMemTy, Type bMemTy, Type cMemTy, Value atomVal, Value d,
                                        Value a, Value b, Value c) const;
+
+    bool isStateful() const;
+    ::mlir::Type getConvertedType(::mlir::MLIRContext *ctx) const;
+    ::mlir::Value setAtomState(OpBuilder &builder, Location loc, Value atomStruct,
+                               Attribute fieldAttr, Value fieldValue) const;
   }];
 
   let builders = [
@@ -306,6 +316,17 @@ def Fly_CopyOpUniversalCopy : Fly_Type<"CopyOpUniversalCopy", "universal_copy", 
     "int32_t":$bitSize
   );
   let assemblyFormat = "`<` $bitSize `>`";
+}
+
+def Fly_CopyOpUniversalAtomic : Fly_Type<"CopyOpUniversalAtomic", "universal_atomic", [
+  DeclareTypeInterfaceMethods<Fly_MayStaticTypeInterface>,
+  DeclareTypeInterfaceMethods<Fly_CopyOpTypeInterface>
+]> {
+  let parameters = (ins
+    "::mlir::fly::AtomicOp":$atomicOp,
+    "Type":$valType
+  );
+  let assemblyFormat = "`<` $atomicOp `,` qualified($valType) `>`";
 }
 
 def Fly_MmaOpUniversalFMA : Fly_Type<"MmaOpUniversalFMA", "universal_fma", [

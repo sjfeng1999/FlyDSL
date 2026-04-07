@@ -6,12 +6,14 @@ from typing import overload
 from .._mlir import ir
 from .._mlir.dialects import arith as _arith
 from .._mlir.dialects import fly
+from .._mlir.dialects._fly_enum_gen import AtomicOp
 from .._mlir.dialects.fly import (
     AddressSpace,
     CachePolicy,
     ComposedLayoutType,
     CoordTensorType,
     CopyAtomType,
+    CopyOpUniversalAtomicType,
     CopyOpUniversalCopyType,
     GemmTraversalOrder,
     IntTupleType,
@@ -54,6 +56,7 @@ __all__ = [
     "TiledCopyType",
     "TiledMmaType",
     "CopyOpUniversalCopyType",
+    "CopyOpUniversalAtomicType",
     "MmaOpUniversalFMAType",
     # UniversalOps
     "UniversalCopy",
@@ -62,6 +65,8 @@ __all__ = [
     "UniversalCopy32b",
     "UniversalCopy64b",
     "UniversalCopy128b",
+    "UniversalAtomic",
+    "AtomicOp",
     "UniversalFMA",
     # Constexpr functions
     "const_expr",
@@ -139,6 +144,7 @@ __all__ = [
     "tile_to_shape",
     "make_mma_atom",
     "make_copy_atom",
+    "atom_set_value",
     "copy_atom_call",
     "mma_atom_call",
     "make_tiled_copy",
@@ -177,6 +183,8 @@ UniversalCopy16b = lambda: CopyOpUniversalCopyType.get(16)
 UniversalCopy32b = lambda: CopyOpUniversalCopyType.get(32)
 UniversalCopy64b = lambda: CopyOpUniversalCopyType.get(64)
 UniversalCopy128b = lambda: CopyOpUniversalCopyType.get(128)
+
+UniversalAtomic = lambda atomic_op, val_type: CopyOpUniversalAtomicType.get(int(atomic_op), val_type)
 
 UniversalFMA = lambda ty: MmaOpUniversalFMAType.get(ty.ir_type)
 
@@ -665,6 +673,12 @@ def make_copy_atom(copy_op_type, elem_type, loc=None, ip=None):
         raise TypeError(f"make_copy_atom: elem_type must be NumericType, ir.Type, or int, got {type(elem_type)}")
     copy_atom_ty = CopyAtomType.get(copy_op=copy_op_type, val_bits=val_bits)
     return fly.make_copy_atom(copy_atom_ty, val_bits=val_bits, loc=loc, ip=ip)
+
+
+@traced_op
+def atom_set_value(atom, field, value, loc=None, ip=None):
+    """Update a field in a stateful atom (SSA-style, returns new atom)."""
+    return fly.atom_set_value(atom.type, atom, field, value, loc=loc, ip=ip)
 
 
 @traced_op

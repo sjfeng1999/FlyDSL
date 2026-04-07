@@ -3,7 +3,9 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 
 #include "flydsl/Dialect/Fly/IR/FlyDialect.h"
@@ -121,6 +123,92 @@ LogicalResult CopyOpUniversalCopyType::emitAtomCall(OpBuilder &builder, Location
                                                     Type dstMemTyArg, Type predMemTyArg,
                                                     Value atomVal, Value src, Value dst,
                                                     Value pred) const {
+  auto predMemTy = cast<fly::MemRefType>(predMemTyArg);
+  Value predVal = LLVM::LoadOp::create(builder, loc, predMemTy.getElemTy(), pred);
+  auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, predVal, /*withElse=*/false);
+  builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+  return emitAtomCall(builder, loc, copyAtomTyArg, srcMemTyArg, dstMemTyArg, atomVal, src, dst);
+}
+
+// --- CopyOpUniversalAtomic ---
+
+bool CopyOpUniversalAtomicType::isStatic() const { return true; }
+
+Value CopyOpUniversalAtomicType::rebuildStaticValue(OpBuilder &builder, Location loc,
+                                                    Value currentValue) const {
+  if (currentValue && isa<MakeCopyAtomOp>(currentValue.getDefiningOp()))
+    return nullptr;
+  int32_t bits = getValType().getIntOrFloatBitWidth();
+  return MakeCopyAtomOp::create(builder, loc, CopyAtomType::get(*this, bits), bits);
+}
+
+Attribute CopyOpUniversalAtomicType::getThrLayout() const { return FxLayout(FxC(1), FxC(1)); }
+
+Attribute CopyOpUniversalAtomicType::getThrBitLayoutSrc() const {
+  int32_t bits = getValType().getIntOrFloatBitWidth();
+  return FxLayout(FxShape(FxC(1), FxC(bits)), FxStride(FxC(1), FxC(1)));
+}
+Attribute CopyOpUniversalAtomicType::getThrBitLayoutDst() const {
+  int32_t bits = getValType().getIntOrFloatBitWidth();
+  return FxLayout(FxShape(FxC(1), FxC(bits)), FxStride(FxC(1), FxC(1)));
+}
+Attribute CopyOpUniversalAtomicType::getThrBitLayoutRef() const {
+  int32_t bits = getValType().getIntOrFloatBitWidth();
+  return FxLayout(FxShape(FxC(1), FxC(bits)), FxStride(FxC(1), FxC(1)));
+}
+
+static LLVM::AtomicBinOp convertAtomicOp(AtomicOp flyOp, bool isFloat) {
+  switch (flyOp) {
+  case AtomicOp::Add:
+    return isFloat ? LLVM::AtomicBinOp::fadd : LLVM::AtomicBinOp::add;
+  case AtomicOp::Max:
+    return isFloat ? LLVM::AtomicBinOp::fmax : LLVM::AtomicBinOp::max;
+  case AtomicOp::Min:
+    return isFloat ? LLVM::AtomicBinOp::fmin : LLVM::AtomicBinOp::min;
+  case AtomicOp::And:
+    return LLVM::AtomicBinOp::_and;
+  case AtomicOp::Or:
+    return LLVM::AtomicBinOp::_or;
+  case AtomicOp::Inc:
+    return LLVM::AtomicBinOp::uinc_wrap;
+  case AtomicOp::Dec:
+    return LLVM::AtomicBinOp::udec_wrap;
+  }
+  llvm_unreachable("unknown fly::AtomicOp");
+}
+
+LogicalResult CopyOpUniversalAtomicType::emitAtomCall(OpBuilder &builder, Location loc,
+                                                      Type copyAtomTyArg, Type srcMemTyArg,
+                                                      Type dstMemTyArg, Value atomVal, Value src,
+                                                      Value dst) const {
+  if (!isa<LLVM::LLVMPointerType>(src.getType()) || !isa<LLVM::LLVMPointerType>(dst.getType()))
+    return failure();
+
+  auto srcMemTy = cast<fly::MemRefType>(srcMemTyArg);
+  auto dstMemTy = cast<fly::MemRefType>(dstMemTyArg);
+
+  Type elemTy = getValType();
+  bool isFloat = isa<FloatType>(elemTy);
+
+  Value srcPtr = applySwizzleOnPtr(builder, loc, cast<TypedValue<LLVM::LLVMPointerType>>(src),
+                                   srcMemTy.getSwizzle());
+  Value dstPtr = applySwizzleOnPtr(builder, loc, cast<TypedValue<LLVM::LLVMPointerType>>(dst),
+                                   dstMemTy.getSwizzle());
+
+  Value loaded = LLVM::LoadOp::create(builder, loc, elemTy, srcPtr);
+
+  LLVM::AtomicBinOp binOp = convertAtomicOp(getAtomicOp(), isFloat);
+  LLVM::AtomicRMWOp::create(builder, loc, binOp, dstPtr, loaded,
+                            LLVM::AtomicOrdering::monotonic);
+  return success();
+}
+
+LogicalResult CopyOpUniversalAtomicType::emitAtomCall(OpBuilder &builder, Location loc,
+                                                      Type copyAtomTyArg, Type srcMemTyArg,
+                                                      Type dstMemTyArg, Type predMemTyArg,
+                                                      Value atomVal, Value src, Value dst,
+                                                      Value pred) const {
   auto predMemTy = cast<fly::MemRefType>(predMemTyArg);
   Value predVal = LLVM::LoadOp::create(builder, loc, predMemTy.getElemTy(), pred);
   auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, predVal, /*withElse=*/false);

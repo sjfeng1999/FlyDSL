@@ -2,14 +2,19 @@
 # Copyright (c) 2025 FlyDSL Project Contributors
 
 import ctypes
-from typing import Generic, TypeVar
+import operator
+from typing import Generic, Type, TypeVar, Union
 
 from flydsl.runtime.device import get_rocm_arch
 
 from .._mlir import ir
+from .._mlir.dialects import arith as _arith
 from .._mlir.dialects import gpu
+from .._mlir.dialects import vector as _vector
 from .meta import traced_op
 from .numeric import (
+    Numeric,
+    as_numeric,
     BFloat16,
     Boolean,
     Float,
@@ -31,12 +36,12 @@ from .numeric import (
     Int16,
     Int32,
     Int64,
-    Numeric,
     Uint8,
     Uint16,
     Uint32,
     Uint64,
 )
+from .utils.arith import ArithValue, fp_to_fp, fp_to_int, int_to_fp, int_to_int
 from .primitive import *
 
 
@@ -256,6 +261,11 @@ __all__ = [
     "Tile",
     "TiledCopy",
     "TiledMma",
+    "Vector",
+    "full",
+    "zeros_like",
+    "ones_like",
+    "full_like",
     "Stream",
     "Tuple3D",
 ]
@@ -591,6 +601,286 @@ class Tensor(BuiltinDslType):
     @traced_op
     def fill(self, value, loc=None, ip=None):
         pass
+
+
+# ---------------------------------------------------------------------------
+# Shape utilities for Vector (pure-Python CuTe shapes)
+# ---------------------------------------------------------------------------
+
+Shape = Union[int, tuple]
+
+
+def _shape_size(shape) -> int:
+    if isinstance(shape, int):
+        return shape
+    return _product_of(shape)
+
+
+def _product_of(tup) -> int:
+    result = 1
+    for s in tup:
+        result *= _shape_size(s)
+    return result
+
+
+def _shape_is_static(shape) -> bool:
+    if isinstance(shape, int):
+        return True
+    if isinstance(shape, tuple):
+        return all(_shape_is_static(s) for s in shape)
+    return False
+
+
+def _flatten_shape(shape):
+    if isinstance(shape, int):
+        return (shape,)
+    result = ()
+    for s in shape:
+        result += _flatten_shape(s)
+    return result
+
+
+def _has_none(coord) -> bool:
+    if coord is None:
+        return True
+    if isinstance(coord, tuple):
+        return any(_has_none(c) for c in coord)
+    return False
+
+
+def _make_col_major_layout(shape):
+    flat = _flatten_shape(shape)
+    stride = [1]
+    for s in flat[:-1]:
+        stride.append(stride[-1] * s)
+    return flat, tuple(stride)
+
+
+class Vector(ArithValue):
+    """Thread-local register-resident data with a CuTe shape.
+
+    Equivalent to CuTeDSL's ``TensorSSA``.  Wraps a flat MLIR
+    ``vector<Nxelem_type>`` together with a compile-time-static nested
+    CuTe shape and a DSL dtype.
+
+    ``Vector`` inherits from ``ArithValue`` so element-wise arithmetic
+    operators (+, -, *, /, comparisons, bitwise) work out-of-the-box
+    between ``Vector``-``Vector`` and ``Vector``-scalar pairs.
+    """
+
+    def __init__(self, value, shape: Shape, dtype: Type[Numeric]):
+        if not _shape_is_static(shape):
+            raise ValueError("dynamic shape is not supported")
+        signed = dtype.signed if hasattr(dtype, "signed") and dtype.signed is not None else None
+        super().__init__(value, signed)
+        self._shape = shape
+        self._dtype = dtype
+
+    @property
+    def dtype(self) -> Type[Numeric]:
+        return self._dtype
+
+    @property
+    def element_type(self) -> Type[Numeric]:
+        return self._dtype
+
+    @property
+    def shape(self):
+        return self._shape
+
+    def __str__(self):
+        return f"Vector<{self.type} o {self.shape}>"
+
+    def __repr__(self):
+        return f"Vector<{self.type} o {self.shape}>"
+
+    def __fly_values__(self):
+        return [self]
+
+    @classmethod
+    def __fly_construct__(cls, values):
+        raise TypeError("Vector requires shape and dtype; use Vector(value, shape, dtype)")
+
+    def _apply_op(self, op, other, flip=False, *, loc=None, ip=None):
+        if isinstance(other, (int, float, bool)):
+            other = as_numeric(other)
+
+        if isinstance(other, Numeric):
+            scalar_val = other.ir_value(loc=loc, ip=ip)
+            broadcast_val = _vector.broadcast(self.type, scalar_val, loc=loc, ip=ip)
+            other = Vector(broadcast_val, self._shape, self._dtype)
+        elif isinstance(other, ArithValue) and not isinstance(other, Vector):
+            broadcast_val = _vector.broadcast(self.type, other, loc=loc, ip=ip)
+            other = Vector(broadcast_val, self._shape, self._dtype)
+
+        if not isinstance(other, Vector):
+            return NotImplemented
+
+        res_dtype = self._dtype
+        if op in (operator.lt, operator.le, operator.gt, operator.ge, operator.eq, operator.ne):
+            res_dtype = Boolean
+
+        lhs, rhs = (other, self) if flip else (self, other)
+
+        lhs_raw = ArithValue(lhs, signed=lhs.signed)
+        rhs_raw = ArithValue(rhs, signed=rhs.signed)
+        result = op(lhs_raw, rhs_raw)
+
+        return Vector(result, self._shape, res_dtype)
+
+    def __add__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.add, other, loc=loc, ip=ip)
+
+    def __radd__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.add, other, flip=True, loc=loc, ip=ip)
+
+    def __sub__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.sub, other, loc=loc, ip=ip)
+
+    def __rsub__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.sub, other, flip=True, loc=loc, ip=ip)
+
+    def __mul__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.mul, other, loc=loc, ip=ip)
+
+    def __rmul__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.mul, other, flip=True, loc=loc, ip=ip)
+
+    def __truediv__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.truediv, other, loc=loc, ip=ip)
+
+    def __rtruediv__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.truediv, other, flip=True, loc=loc, ip=ip)
+
+    def __floordiv__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.floordiv, other, loc=loc, ip=ip)
+
+    def __rfloordiv__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.floordiv, other, flip=True, loc=loc, ip=ip)
+
+    def __mod__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.mod, other, loc=loc, ip=ip)
+
+    def __rmod__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.mod, other, flip=True, loc=loc, ip=ip)
+
+    def __pow__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.pow, other, loc=loc, ip=ip)
+
+    def __rpow__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.pow, other, flip=True, loc=loc, ip=ip)
+
+    def __neg__(self, *, loc=None, ip=None):
+        return self._apply_op(operator.sub, 0, flip=True, loc=loc, ip=ip)
+
+    def __eq__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.eq, other, loc=loc, ip=ip)
+
+    def __ne__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.ne, other, loc=loc, ip=ip)
+
+    def __lt__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.lt, other, loc=loc, ip=ip)
+
+    def __le__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.le, other, loc=loc, ip=ip)
+
+    def __gt__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.gt, other, loc=loc, ip=ip)
+
+    def __ge__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.ge, other, loc=loc, ip=ip)
+
+    def __and__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.and_, other, loc=loc, ip=ip)
+
+    def __rand__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.and_, other, flip=True, loc=loc, ip=ip)
+
+    def __or__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.or_, other, loc=loc, ip=ip)
+
+    def __ror__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.or_, other, flip=True, loc=loc, ip=ip)
+
+    def __xor__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.xor, other, loc=loc, ip=ip)
+
+    def __rxor__(self, other, *, loc=None, ip=None):
+        return self._apply_op(operator.xor, other, flip=True, loc=loc, ip=ip)
+
+    def reshape(self, shape: Shape):
+        cur_size = _shape_size(self._shape)
+        new_size = _shape_size(shape)
+        if cur_size != new_size:
+            raise ValueError(f"cannot reshape {self._shape} (size {cur_size}) to {shape} (size {new_size})")
+        return Vector(self, shape, self._dtype)
+
+    def __getitem__(self, coord, *, loc=None, ip=None):
+        if coord is None:
+            return self
+
+        if not _has_none(coord):
+            flat, strides = _make_col_major_layout(self._shape)
+            if isinstance(coord, int):
+                coord = (coord,)
+            if isinstance(coord, tuple):
+                flat_coord = _flatten_shape(coord) if any(isinstance(c, tuple) for c in coord) else coord
+            else:
+                flat_coord = (coord,)
+            idx = 0
+            for c, s in zip(flat_coord, strides):
+                idx += c * s
+            idx_val = _arith.constant(ir.IndexType.get(), idx, loc=loc, ip=ip)
+            res_val = _vector.ExtractOp(self, static_position=[], dynamic_position=[idx_val], loc=loc, ip=ip).result
+            return self._dtype(res_val)
+
+        raise NotImplementedError("slice access on Vector is not yet supported")
+
+    def to(self, dtype: Type[Numeric], *, loc=None, ip=None):
+        src_dtype = self._dtype
+        if src_dtype == dtype:
+            return self
+
+        src = ArithValue(self, signed=src_dtype.signed if hasattr(src_dtype, "signed") else None)
+        if src_dtype.is_float and dtype.is_float:
+            res = fp_to_fp(src, dtype.ir_type, loc=loc, ip=ip)
+        elif src_dtype.is_float and dtype.is_integer:
+            res = fp_to_int(src, dtype.signed, dtype.ir_type, loc=loc, ip=ip)
+        elif src_dtype.is_integer and dtype.is_float:
+            res = int_to_fp(src, src_dtype.signed, dtype.ir_type, loc=loc, ip=ip)
+        else:
+            res = int_to_int(src, dtype, signed=src_dtype.signed, loc=loc, ip=ip)
+        return Vector(res, self._shape, dtype)
+
+    def ir_value(self, *, loc=None, ip=None):
+        return self
+
+    def __hash__(self):
+        return super().__hash__()
+
+
+def full(shape: Shape, fill_value, dtype: Type[Numeric], *, loc=None, ip=None) -> Vector:
+    total = _shape_size(shape)
+    if isinstance(fill_value, (int, float, bool)):
+        fill_value = dtype(fill_value)
+    if isinstance(fill_value, Numeric):
+        fill_value = fill_value.to(dtype, loc=loc, ip=ip).ir_value(loc=loc, ip=ip)
+    vec_ty = ir.VectorType.get([total], dtype.ir_type)
+    vec = _vector.broadcast(vec_ty, fill_value, loc=loc, ip=ip)
+    return Vector(vec, shape, dtype)
+
+
+def zeros_like(v: Vector, *, loc=None, ip=None) -> Vector:
+    return full(v.shape, v.dtype.zero, v.dtype, loc=loc, ip=ip)
+
+
+def ones_like(v: Vector, *, loc=None, ip=None) -> Vector:
+    return full(v.shape, 1, v.dtype, loc=loc, ip=ip)
+
+
+def full_like(v: Vector, fill_value, *, loc=None, ip=None) -> Vector:
+    return full(v.shape, fill_value, v.dtype, loc=loc, ip=ip)
 
 
 @ir.register_value_caster(CopyAtomType.static_typeid, replace=True)

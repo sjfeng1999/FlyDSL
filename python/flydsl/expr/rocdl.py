@@ -17,8 +17,13 @@ Example:
     >>> rocdl.barrier()
 """
 
-from .._mlir._mlir_libs._mlirDialectsFlyROCDL import CopyOpCDNA3BufferCopyType, MmaOpCDNA3_MFMAType
+from .._mlir._mlir_libs._mlirDialectsFlyROCDL import (
+    CopyOpCDNA3BufferAtomicType,
+    CopyOpCDNA3BufferCopyType,
+    MmaOpCDNA3_MFMAType,
+)
 from .._mlir._mlir_libs._mlirDialectsFlyROCDL import MmaOpGFX1250_WMMAType
+from .._mlir.dialects._fly_enum_gen import AtomicOp
 from .._mlir.dialects.rocdl import *  # noqa: F401,F403
 from .._mlir.extras import types as T
 
@@ -26,6 +31,12 @@ BufferCopy = lambda bit_size: CopyOpCDNA3BufferCopyType.get(bit_size)  # noqa: E
 BufferCopy32b = lambda: CopyOpCDNA3BufferCopyType.get(32)  # noqa: E731
 BufferCopy64b = lambda: CopyOpCDNA3BufferCopyType.get(64)  # noqa: E731
 BufferCopy128b = lambda: CopyOpCDNA3BufferCopyType.get(128)  # noqa: E731
+
+BufferAtomic = lambda atomic_op, val_type: CopyOpCDNA3BufferAtomicType.get(int(atomic_op), val_type)  # noqa: E731
+BufferAtomicFadd32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Add), T.f32)  # noqa: E731
+BufferAtomicFmax32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Max), T.f32)  # noqa: E731
+BufferAtomicSmax32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Max), T.i32)  # noqa: E731
+BufferAtomicUmin32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Min), T.i32)  # noqa: E731
 
 
 def MFMA(m, n, k, elem_type, elem_type_b=None, elem_type_acc=None):
@@ -669,6 +680,13 @@ __all__ = [
     "BufferCopy32b",
     "BufferCopy64b",
     "BufferCopy128b",
+    "CopyOpCDNA3BufferAtomicType",
+    "AtomicOp",
+    "BufferAtomic",
+    "BufferAtomicFadd32b",
+    "BufferAtomicFmax32b",
+    "BufferAtomicSmax32b",
+    "BufferAtomicUmin32b",
     # MMA atom types
     "MmaOpCDNA3_MFMAType",
     "MFMA",

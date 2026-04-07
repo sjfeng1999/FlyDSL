@@ -73,6 +73,24 @@ struct PyCopyOpCDNA3BufferCopyType : PyConcreteType<PyCopyOpCDNA3BufferCopyType>
   }
 };
 
+struct PyCopyOpCDNA3BufferAtomicType : PyConcreteType<PyCopyOpCDNA3BufferAtomicType> {
+  FLYDSL_REGISTER_TYPE_BINDING(CopyOpCDNA3BufferAtomicType, "CopyOpCDNA3BufferAtomicType");
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](int32_t atomicOp, PyType &valTypeObj, DefaultingPyMlirContext context) {
+          MLIRContext *ctx = unwrap(context.get()->get());
+          return PyCopyOpCDNA3BufferAtomicType(
+              context->getRef(),
+              wrap(CopyOpCDNA3BufferAtomicType::get(
+                  ctx, static_cast<::mlir::fly::AtomicOp>(atomicOp), unwrap(valTypeObj))));
+        },
+        "atomic_op"_a, "val_type"_a, nb::kw_only(), "context"_a = nb::none(),
+        "Create a CopyOpCDNA3BufferAtomicType with atomic op and value type");
+  }
+};
+
 } // namespace fly_rocdl
 } // namespace MLIR_BINDINGS_PYTHON_DOMAIN
 } // namespace python
@@ -84,4 +102,5 @@ NB_MODULE(_mlirDialectsFlyROCDL, m) {
   ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyMmaOpCDNA3_MFMAType::bind(m);
   ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyMmaOpGFX1250_WMMAType::bind(m);
   ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpCDNA3BufferCopyType::bind(m);
+  ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpCDNA3BufferAtomicType::bind(m);
 }

@@ -4,9 +4,13 @@
 from ..._mlir import ir
 from ..._mlir._mlir_libs._mlirDialectsFlyROCDL import MmaOpGFX1250_WMMAType
 from ..._mlir.dialects import arith, fly
-from ..._mlir.dialects._fly_enum_gen import AddressSpace
+from ..._mlir.dialects._fly_enum_gen import AddressSpace, AtomicOp
 from ..._mlir.dialects.fly import PointerType
-from ..._mlir.dialects.fly_rocdl import CopyOpCDNA3BufferCopyType, MmaOpCDNA3_MFMAType
+from ..._mlir.dialects.fly_rocdl import (
+    CopyOpCDNA3BufferAtomicType,
+    CopyOpCDNA3BufferCopyType,
+    MmaOpCDNA3_MFMAType,
+)
 from ..._mlir.extras import types as T
 from ..primitive import (
     get_iter,
@@ -22,6 +26,12 @@ BufferCopy16b = lambda: CopyOpCDNA3BufferCopyType.get(16)
 BufferCopy32b = lambda: CopyOpCDNA3BufferCopyType.get(32)
 BufferCopy64b = lambda: CopyOpCDNA3BufferCopyType.get(64)
 BufferCopy128b = lambda: CopyOpCDNA3BufferCopyType.get(128)
+
+BufferAtomic = lambda atomic_op, val_type: CopyOpCDNA3BufferAtomicType.get(int(atomic_op), val_type)
+BufferAtomicFadd32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Add), T.f32)
+BufferAtomicFmax32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Max), T.f32)
+BufferAtomicSmax32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Max), T.i32)
+BufferAtomicUmin32b = lambda: CopyOpCDNA3BufferAtomicType.get(int(AtomicOp.Min), T.i32)
 
 
 def MFMA(m, n, k, elem_ty_ab, elem_ty_acc=None):
