@@ -79,7 +79,8 @@ public:
       Value srcVal = copyOp.getSrc();
       if (srcEligible) {
         Value srcIter = srcVal.getDefiningOp<MakeViewOp>().getIter();
-        srcVal = PtrLoadOp::create(builder, loc, RegMem2SSAType(srcTy), srcIter);
+        srcVal = PtrLoadOp::create(builder, loc,
+                                   RegMem2SSAType(srcTy, /*llvmCompatibleType=*/true), srcIter);
       }
 
       Value pred = copyOp.getPred();
@@ -87,12 +88,13 @@ public:
         auto predMemTy = cast<fly::MemRefType>(pred.getType());
         if (isEligibleToPromote(predMemTy)) {
           Value predIter = pred.getDefiningOp<MakeViewOp>().getIter();
-          pred = PtrLoadOp::create(builder, loc, RegMem2SSAType(predMemTy), predIter);
+          pred = PtrLoadOp::create(
+              builder, loc, RegMem2SSAType(predMemTy, /*llvmCompatibleType=*/true), predIter);
         }
       }
 
       if (dstEligible) {
-        auto ssaTy = RegMem2SSAType(dstTy);
+        auto ssaTy = RegMem2SSAType(dstTy, /*llvmCompatibleType=*/true);
         Value dstIter = copyOp.getDst().getDefiningOp<MakeViewOp>().getIter();
         Value oldDst = pred ? PtrLoadOp::create(builder, loc, ssaTy, dstIter) : Value{};
         auto ssaOp =
@@ -125,20 +127,27 @@ public:
 
       if (aEligible) {
         Value aIter = aVal.getDefiningOp<MakeViewOp>().getIter();
-        aVal = PtrLoadOp::create(builder, loc, RegMem2SSAType(aTy), aIter).getResult();
+        aVal = PtrLoadOp::create(builder, loc,
+                                 RegMem2SSAType(aTy, /*llvmCompatibleType=*/true), aIter)
+                   .getResult();
       }
       if (bEligible) {
         Value bIter = bVal.getDefiningOp<MakeViewOp>().getIter();
-        bVal = PtrLoadOp::create(builder, loc, RegMem2SSAType(bTy), bIter).getResult();
+        bVal = PtrLoadOp::create(builder, loc,
+                                 RegMem2SSAType(bTy, /*llvmCompatibleType=*/true), bIter)
+                   .getResult();
       }
       if (cEligible) {
         Value cIter = cVal.getDefiningOp<MakeViewOp>().getIter();
-        cVal = PtrLoadOp::create(builder, loc, RegMem2SSAType(cTy), cIter).getResult();
+        cVal = PtrLoadOp::create(builder, loc,
+                                 RegMem2SSAType(cTy, /*llvmCompatibleType=*/true), cIter)
+                   .getResult();
       }
 
       if (dEligible) {
-        auto ssaOp = MmaAtomCallSSA::create(builder, loc, TypeRange{RegMem2SSAType(dTy)},
-                                            mmaOp.getMmaAtom(), /*d=*/nullptr, aVal, bVal, cVal);
+        auto ssaOp = MmaAtomCallSSA::create(
+            builder, loc, TypeRange{RegMem2SSAType(dTy, /*llvmCompatibleType=*/true)},
+            mmaOp.getMmaAtom(), /*d=*/nullptr, aVal, bVal, cVal);
         Value dIter = mmaOp.getD().getDefiningOp<MakeViewOp>().getIter();
         PtrStoreOp::create(builder, loc, ssaOp.getResult(0), dIter);
       } else {

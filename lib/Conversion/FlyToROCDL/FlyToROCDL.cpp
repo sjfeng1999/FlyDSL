@@ -690,6 +690,17 @@ public:
   FlyTypeConverter() {
     addConversion([](Type type) { return type; });
 
+    addConversion([&](FloatType floatTy) -> std::optional<Type> {
+      if (floatTy.getWidth() < 16)
+        return IntegerType::get(floatTy.getContext(), floatTy.getWidth());
+      return std::nullopt;
+    });
+    addConversion([&](VectorType vecTy) -> std::optional<Type> {
+      Type convertedElem = convertType(vecTy.getElementType());
+      if (!convertedElem || convertedElem == vecTy.getElementType())
+        return std::nullopt;
+      return VectorType::get(vecTy.getShape(), convertedElem, vecTy.getScalableDims());
+    });
     addConversion([&](fly::MemRefType flyMemRefTy) -> Type {
       if (flyMemRefTy.getAddressSpace().getValue() == AddressSpace::BufferDesc)
         return BufferFatPtr::getType(flyMemRefTy.getContext());
