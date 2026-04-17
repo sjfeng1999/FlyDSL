@@ -146,6 +146,70 @@ struct PyCopyOpCDNA4LdsReadTransposeType : PyConcreteType<PyCopyOpCDNA4LdsReadTr
   }
 };
 
+struct PyCopyOpGFX1250TDMLoad2DType : PyConcreteType<PyCopyOpGFX1250TDMLoad2DType> {
+  FLYDSL_REGISTER_TYPE_BINDING(CopyOpGFX1250TDMLoad2DType, "CopyOpGFX1250TDMLoad2DType");
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](int32_t elemBits, int32_t tileDim0, int32_t tileDim1, int32_t padInterval,
+           int32_t padAmount, int32_t numWarps, bool atomicBarrierEnable,
+           DefaultingPyMlirContext context) {
+          MLIRContext *ctx = unwrap(context.get()->get());
+          return PyCopyOpGFX1250TDMLoad2DType(
+              context->getRef(),
+              wrap(CopyOpGFX1250TDMLoad2DType::get(ctx, elemBits, tileDim0, tileDim1, padInterval,
+                                                    padAmount, numWarps, atomicBarrierEnable)));
+        },
+        "elem_bits"_a, "tile_dim0"_a, "tile_dim1"_a, "pad_interval"_a = 0, "pad_amount"_a = 0,
+        "num_warps"_a, "atomic_barrier_enable"_a = false, nb::kw_only(), "context"_a = nb::none(),
+        "Create a CopyOpGFX1250TDMLoad2DType descriptor atom");
+  }
+};
+
+struct PyCopyOpGFX1250TDMStore2DType : PyConcreteType<PyCopyOpGFX1250TDMStore2DType> {
+  FLYDSL_REGISTER_TYPE_BINDING(CopyOpGFX1250TDMStore2DType, "CopyOpGFX1250TDMStore2DType");
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](int32_t elemBits, int32_t tileDim0, int32_t tileDim1, int32_t padInterval,
+           int32_t padAmount, int32_t numWarps, bool atomicBarrierEnable,
+           DefaultingPyMlirContext context) {
+          MLIRContext *ctx = unwrap(context.get()->get());
+          return PyCopyOpGFX1250TDMStore2DType(
+              context->getRef(),
+              wrap(CopyOpGFX1250TDMStore2DType::get(ctx, elemBits, tileDim0, tileDim1, padInterval,
+                                                     padAmount, numWarps, atomicBarrierEnable)));
+        },
+        "elem_bits"_a, "tile_dim0"_a, "tile_dim1"_a, "pad_interval"_a = 0, "pad_amount"_a = 0,
+        "num_warps"_a, "atomic_barrier_enable"_a = false, nb::kw_only(), "context"_a = nb::none(),
+        "Create a CopyOpGFX1250TDMStore2DType descriptor atom");
+  }
+};
+
+struct PyCopyOpGFX1250TDMGatherType : PyConcreteType<PyCopyOpGFX1250TDMGatherType> {
+  FLYDSL_REGISTER_TYPE_BINDING(CopyOpGFX1250TDMGatherType, "CopyOpGFX1250TDMGatherType");
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](int32_t elemBits, int32_t rowWidth, int32_t indexSize, int32_t maxIndices,
+           int32_t padInterval, int32_t padAmount, bool isStore,
+           DefaultingPyMlirContext context) {
+          MLIRContext *ctx = unwrap(context.get()->get());
+          return PyCopyOpGFX1250TDMGatherType(
+              context->getRef(),
+              wrap(CopyOpGFX1250TDMGatherType::get(ctx, elemBits, rowWidth, indexSize, maxIndices,
+                                                    padInterval, padAmount, isStore)));
+        },
+        "elem_bits"_a, "row_width"_a, "index_size"_a = 32, "max_indices"_a,
+        "pad_interval"_a = 0, "pad_amount"_a = 0, "is_store"_a = false, nb::kw_only(),
+        "context"_a = nb::none(),
+        "Create a CopyOpGFX1250TDMGatherType gather descriptor atom");
+  }
+};
+
 } // namespace fly_rocdl
 } // namespace MLIR_BINDINGS_PYTHON_DOMAIN
 } // namespace python
@@ -162,4 +226,7 @@ NB_MODULE(_mlirDialectsFlyROCDL, m) {
   ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpCDNA3BufferAtomicType::bind(m);
   ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpCDNA4LdsReadTransposeType::bind(
       m);
+  ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpGFX1250TDMLoad2DType::bind(m);
+  ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpGFX1250TDMStore2DType::bind(m);
+  ::mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::fly_rocdl::PyCopyOpGFX1250TDMGatherType::bind(m);
 }

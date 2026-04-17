@@ -16,7 +16,7 @@ This module provides access to ROCm-specific GPU operations including:
 
 from ..._mlir.dialects.rocdl import *  # noqa: F401,F403
 from ..meta import traced_op
-from . import cdna4
+from . import cdna4, gfx1250  # noqa: F401
 
 # Keep references to ODS-generated builders so we can wrap them without losing access.
 _ods_wmma_scale_f32_16x16x128_f8f6f4 = globals().get("wmma_scale_f32_16x16x128_f8f6f4", None)
@@ -398,6 +398,14 @@ def lds_transpose_load(result_type, lds_memref, elem_offset, elem_bytes):
 # ── New high-level helpers from universal.py ──────────────────────────
 from .universal import *  # noqa: F401,F403
 from .inline_asm import *  # noqa: F401,F403
+
+# ── Elementwise wrappers that accept any-size vectors ────────────────
+# Overrides the raw star-imported ODS builders for fast-approx unary ops
+# (``rcp``/``rsq``) and adds ``_v``-suffixed variants for sub-block cvt ops
+# (``cvt_pk_fp8_f32_v``, ``cvt_pkrtz_v``, ...). For generic math ops
+# (cos/exp/log/sin/sqrt/tanh/...) use ``flydsl.expr.math`` which handles
+# both scalar and vector inputs natively.
+from .rocdl_wrapper import *  # noqa: F401,F403,E402
 
 # ── Wrappers: accept DSL Numeric args (fx.Int32, fx.Float32, etc.) ─────────
 # ODS-generated ops require raw ir.Value. These wrappers auto-convert.
