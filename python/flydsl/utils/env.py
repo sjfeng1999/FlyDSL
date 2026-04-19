@@ -225,6 +225,7 @@ class CompileEnvManager(EnvManager):
     compile_only = OptBool(False, env_var="COMPILE_ONLY", description="Only compile without execution, useful for verifying compilation without a GPU")
     arch = OptStr("", env_var="ARCH", description="Override target GPU architecture (e.g. gfx942, gfx950)")
     backend = OptStr("rocm", description="GPU compile backend id (e.g. rocm)")
+    sandbox = OptBool(False, description="Run MLIR pass pipeline in an isolated subprocess to survive compiler crashes")
 
 
 class DebugEnvManager(EnvManager):

@@ -21,6 +21,12 @@ from ..expr.typing import Stream
 from ..utils import env, log
 from .ast_rewriter import ASTRewriter
 from .backends import compile_backend_name, get_backend
+from .compile_sandbox import (
+    MlirCompilationCrashed,
+    MlirCompilationTimeout,
+    is_sandbox_enabled,
+    run_pass_pipeline_sandboxed,
+)
 from .jit_argument import convert_to_jit_arguments
 from .jit_executor import CompiledArtifact
 from .kernel_function import (
@@ -378,9 +384,10 @@ class MlirCompiler:
 
         module = ir.Module.parse(module.operation.get_asm(enable_debug_info=env.debug.enable_debug_info))
         fragments, llvm_opts = _pipeline_fragments(backend)
+        sandbox = is_sandbox_enabled()
 
         from .llvm_options import llvm_options as _llvm_options
-        _llvm_ctx = _llvm_options(llvm_opts) if llvm_opts else nullcontext()
+        _llvm_ctx = nullcontext() if sandbox else (_llvm_options(llvm_opts) if llvm_opts else nullcontext())
 
         if env.debug.print_origin_ir:
             log().info(f"Origin IR: \n{module}")
@@ -408,9 +415,33 @@ class MlirCompiler:
 
                     stage_num = stage_num_base + idx
                     stage_name = f"{stage_num:02d}_{_stage_label_from_fragment(frag)}"
-                    pm = PassManager.parse(f"builtin.module({frag})")
-                    pm.enable_verifier(env.debug.enable_verifier)
-                    pm.run(module.operation)
+                    pipeline = f"builtin.module({frag})"
+                    try:
+                        if sandbox:
+                            module = run_pass_pipeline_sandboxed(
+                                module,
+                                pipeline,
+                                enable_verifier=env.debug.enable_verifier,
+                                enable_debug_info=True,
+                                print_after_all=env.debug.print_after_all,
+                                llvm_opts=llvm_opts,
+                                capture_stderr_to=dump_dir / f"{stage_name}.stderr",
+                            )
+                        else:
+                            pm = PassManager.parse(pipeline)
+                            pm.enable_verifier(env.debug.enable_verifier)
+                            pm.run(module.operation)
+                    except (MlirCompilationCrashed, MlirCompilationTimeout) as exc:
+                        log().error(
+                            "[flydsl.compile] crash at stage %s; pre-stage IR + worker stderr in %s",
+                            stage_name,
+                            dump_dir,
+                        )
+                        raise RuntimeError(
+                            f"FlyDSL pass pipeline crashed at stage '{stage_name}'.\n"
+                            f"Pre-stage IR + worker stderr are in {dump_dir}/.\n"
+                            f"{exc}"
+                        ) from exc
 
                     stage_asm = module.operation.get_asm(enable_debug_info=True)
                     out = _dump_ir(stage_name, dump_dir=dump_dir, asm=stage_asm)
@@ -439,10 +470,32 @@ class MlirCompiler:
                         print(f"[flydsl.compile] dump {isa_stage} -> {isa_out}")
             else:
                 pipeline = f"builtin.module({','.join(fragments)})"
-                pm = PassManager.parse(pipeline)
-                pm.enable_verifier(env.debug.enable_verifier)
-                pm.enable_ir_printing(print_after_all=env.debug.print_after_all)
-                pm.run(module.operation)
+                if sandbox:
+                    try:
+                        module = run_pass_pipeline_sandboxed(
+                            module,
+                            pipeline,
+                            enable_verifier=env.debug.enable_verifier,
+                            enable_debug_info=env.debug.enable_debug_info,
+                            print_after_all=env.debug.print_after_all,
+                            llvm_opts=llvm_opts,
+                        )
+                    except (MlirCompilationCrashed, MlirCompilationTimeout) as exc:
+                        log().error(
+                            "[flydsl.compile] sandbox worker died for func=%s; "
+                            "rerun with FLYDSL_DUMP_IR=1 to get per-stage IR",
+                            func_name or "<unknown>",
+                        )
+                        raise RuntimeError(
+                            f"FlyDSL pass pipeline crashed (sandbox).\n"
+                            f"Set FLYDSL_DUMP_IR=1 to capture per-stage IR.\n"
+                            f"{exc}"
+                        ) from exc
+                else:
+                    pm = PassManager.parse(pipeline)
+                    pm.enable_verifier(env.debug.enable_verifier)
+                    pm.enable_ir_printing(print_after_all=env.debug.print_after_all)
+                    pm.run(module.operation)
 
         return module
 
