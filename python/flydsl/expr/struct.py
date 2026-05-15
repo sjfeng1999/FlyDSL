@@ -282,6 +282,13 @@ def _construct_field_from_ir(type_spec: Any, values):
     return ctor(values)
 
 
+def _append_poke_result(results: list, result):
+    if isinstance(result, list):
+        results.extend(result)
+    elif result is not None:
+        results.append(result)
+
+
 def _ir_value_count_from_type(type_spec: Any) -> int:
     if is_struct_type(type_spec):
         return sum(_ir_value_count_from_type(eff) for _, eff in _effective_field_defs(type_spec))
@@ -431,11 +438,45 @@ def _make_composite_class(
 
     @classmethod
     def __peek_from_ptr__(cls, ptr: Pointer):
-        raise NotImplementedError(f"{_display_name(cls)} does not support __peek_from_ptr__ yet")
+        if policy != CompositeKind.Product:
+            raise NotImplementedError(f"{_display_name(cls)} does not support __peek_from_ptr__")
+        _, _, offsets = _storage_layout(cls)
+        values = {}
+        for name, eff_type in _effective_field_defs(cls):
+            if _is_constexpr_type(eff_type):
+                values[name] = _construct_field_from_ir(eff_type, [])
+                continue
+            if name not in offsets:
+                raise TypeError(
+                    f"Cannot peek field '{name}' in schema {_display_name(cls)} because it has no storage offset."
+                )
+            values[name] = peek_from_ptr(eff_type, add_offset(ptr, offsets[name]))
+        return cls(**values)
 
     @classmethod
     def __poke_into_ptr__(cls, ptr: Pointer, value):
-        raise NotImplementedError(f"{_display_name(cls)} does not support __poke_into_ptr__ yet")
+        if policy != CompositeKind.Product:
+            raise NotImplementedError(f"{_display_name(cls)} does not support __poke_into_ptr__")
+        if not isinstance(value, cls):
+            raise TypeError(
+                f"{_display_name(cls)}.__poke_into_ptr__ expects {_display_name(cls)} value, "
+                f"got {type(value).__name__}."
+            )
+
+        _, _, offsets = _storage_layout(cls)
+        value_field_types = dict(_effective_field_defs(type(value))) if is_struct_type(type(value)) else {}
+        results = []
+        for field in fields:
+            eff_type = value_field_types.get(field.name, field.type_spec)
+            if _is_constexpr_type(eff_type):
+                continue
+            if field.name not in offsets:
+                raise TypeError(
+                    f"Cannot poke field '{field.name}' in schema {_display_name(cls)} because it has no storage offset."
+                )
+            result = poke_into_ptr(eff_type, add_offset(ptr, offsets[field.name]), getattr(value, field.name))
+            _append_poke_result(results, result)
+        return results
 
     def __cache_signature__(self):
         parts = [type(self)]
@@ -646,6 +687,18 @@ class Storage:
         super().__init_subclass__(**kwargs)
 
 
+# Mark the root `fly.add_offset` of an Arena allocation with `fly.alloc_id`.
+# Downstream, `FlyToROCDL`'s `annotateSharedAllocAliasScopes` pass walks
+# from these tagged ops and attaches `!alias.scope` metadata to the LDS
+# loads/stores derived from this arena. That metadata tells AMDGPU's
+# `SIInsertWaitcnts` pass that these LDS accesses do not alias the
+# surrounding global-memory traffic, which is what restores tight
+# `s_waitcnt lgkmcnt` scheduling on dynamic shared memory. The id value
+# is opaque — the pass uses a single shared scope per kernel.
+def _tag_alloc_id(ptr_result):
+    ptr_result.owner.attributes["fly.alloc_id"] = ir.IntegerAttr.get(ir.IntegerType.get_signless(64), 0)
+
+
 class Arena:
     DEFAULT_BASE_ALIGNMENT = 16
 
@@ -681,6 +734,7 @@ class Arena:
             align = alignment if alignment is not None else self._base_alignment
             offset = self._bump(nbytes, align)
             base = add_offset(self.base_ptr, offset)
+            _tag_alloc_id(base)
             return Storage[Array[Uint8, nbytes]](base)
         else:
             storable = storable_or_int
@@ -688,4 +742,5 @@ class Arena:
             align = dsl_align_of(storable) if alignment is None else max(dsl_align_of(storable), alignment)
             offset = self._bump(nbytes, align)
             base = add_offset(self.base_ptr, offset)
+            _tag_alloc_id(base)
             return Storage[storable](base)

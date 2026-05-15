@@ -2793,6 +2793,39 @@ public:
   }
 };
 
+// Fold `add_offset(add_offset(ptr, o1), o2)` -> `add_offset(ptr, o1 + o2)`,
+// preserving the `fly.alloc_id` discardable attribute used downstream by
+// FlyToROCDL's `annotateSharedAllocAliasScopes` pass. (The previous TD
+// version of this fold dropped discardable attributes.)
+class FoldAddOffsetChain : public OpRewritePattern<AddOffsetOp> {
+public:
+  using OpRewritePattern<AddOffsetOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AddOffsetOp op, PatternRewriter &rewriter) const override {
+    auto innerOp = op.getPtr().getDefiningOp<AddOffsetOp>();
+    if (!innerOp)
+      return failure();
+    if (!isa<PointerType>(innerOp.getPtr().getType()))
+      return failure();
+    if (!isa<IntTupleType>(innerOp.getOffset().getType()) ||
+        !isa<IntTupleType>(op.getOffset().getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value mergedOffset =
+        IntTupleAddOp::create(rewriter, loc, innerOp.getOffset(), op.getOffset());
+    auto newOp = AddOffsetOp::create(rewriter, loc, innerOp.getPtr(), mergedOffset);
+
+    if (auto attr = op->getAttr("fly.alloc_id"))
+      newOp->setAttr("fly.alloc_id", attr);
+    else if (auto attr = innerOp->getAttr("fly.alloc_id"))
+      newOp->setAttr("fly.alloc_id", attr);
+
+    rewriter.replaceOp(op, newOp.getResult());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Generated patterns
 //===----------------------------------------------------------------------===//
@@ -2871,6 +2904,7 @@ public:
     // MemRef/Ptr operations
     patterns.add<MemRefLoadVecOpLowering, MemRefStoreVecOpLowering>(context);
     patterns.add<MemRefAllocaOpLowering>(context);
+    patterns.add<FoldAddOffsetChain>(context);
 
     // Utility ops
     patterns.add<PrintOpLowering>(context);

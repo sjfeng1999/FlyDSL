@@ -1058,6 +1058,13 @@ def ptr_store(value, ptr, loc=None, ip=None):
 
 @traced_op
 def recast_iter(result_type, src, loc=None, ip=None):
+    from .numeric import Numeric
+
+    is_elem_type = isinstance(result_type, Numeric) or (
+        isinstance(result_type, type) and issubclass(result_type, Numeric)
+    )
+    if is_elem_type:
+        result_type = PointerType.get(result_type.ir_type, src.memspace, src.alignment)
     return fly.recast_iter(result_type, src, loc=loc, ip=ip)
 
 

@@ -14,6 +14,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 
 #include "flydsl/Conversion/FlyToROCDL/FlyToROCDL.h"
@@ -270,8 +271,11 @@ public:
       return failure();
 
     Type elemTy = projectToLLVMCompatibleElemTy(flyPtrTy.getElemTy());
-    Value gep = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemTy, base, ValueRange{offsetVal});
-    rewriter.replaceOp(op, gep);
+
+    auto gepOp = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemTy, base, ValueRange{offsetVal});
+    if (auto allocId = op->getAttr("fly.alloc_id"))
+      gepOp->setAttr("fly.alloc_id", allocId);
+    rewriter.replaceOp(op, gepOp.getResult());
     return success();
   }
 };
@@ -757,6 +761,105 @@ public:
   }
 };
 
+// ---------------------------------------------------------------------------
+// annotateSharedAllocAliasScopes
+//
+// Attach a single `!alias.scope` (against an empty `!noalias` set) to every
+// `llvm.load` / `llvm.store` whose address is derived from a SharedAllocator
+// allocation. The Python-side `Arena.allocate(...)` tags the root
+// `fly.add_offset` (lowered to a `LLVM::GEPOp`) with a `fly.alloc_id`
+// discardable attribute; we forward-walk from each tagged GEP through the
+// pointer-arithmetic chain (GEP / cast / ptrtoint+arith / inttoptr) and
+// record every reachable `LLVM::AliasAnalysisOpInterface` user.
+//
+// Why a single scope (instead of one scope per allocation):
+//   The kernel writes are `rocdl.raw.ptr.buffer.load.lds` intrinsics whose
+//   destination GEP shares the same base as the subsequent `llvm.load`
+//   reads. Tagging the *reads* with a non-empty `alias.scope` is what tells
+//   AMDGPU's `SIInsertWaitcnts` pass that the LDS reads do not alias the
+//   surrounding global-memory traffic, which is enough to recover the
+//   static-LDS baseline `s_waitcnt lgkmcnt` schedule. We deliberately do
+//   *not* try to disambiguate sub-allocations against each other: LLVM's
+//   `BasicAA` already handles that via constant GEP offsets, and tagging
+//   each sub-buffer with its own scope would force us to also tag the
+//   `buffer.load.lds` writes — which empirically regresses vmcnt scheduling
+//   (~6% on 8192³ FP8 GEMM).
+//
+// We deliberately skip `ROCDL::RawPtrBufferLoadLdsOp` even though it
+// implements the AliasAnalysisOpInterface — see comment above.
+static void annotateSharedAllocAliasScopes(Operation *topOp) {
+  topOp->walk([](Operation *funcOp) {
+    if (!isa<gpu::GPUFuncOp, LLVM::LLVMFuncOp>(funcOp))
+      return WalkResult::advance();
+
+    // Collect all root pointer ops tagged by `Arena.allocate()`. The Python
+    // side stamps `fly.alloc_id` on the `fly.add_offset` that derives the
+    // sub-allocation's base pointer, which `AddOffsetOpLowering` carries
+    // over onto the resulting `LLVM::GEPOp`.
+    SmallVector<Operation *> rootOps;
+    funcOp->walk([&](Operation *o) {
+      if (isa<LLVM::GEPOp>(o) && o->hasAttr("fly.alloc_id"))
+        rootOps.push_back(o);
+    });
+    if (rootOps.empty())
+      return WalkResult::advance();
+
+    MLIRContext *ctx = funcOp->getContext();
+    auto domain = LLVM::AliasScopeDomainAttr::get(ctx, StringAttr::get(ctx, "fly.shared_alloc"));
+    auto scope = LLVM::AliasScopeAttr::get(domain, StringAttr::get(ctx, "fly.shared_alloc"));
+    auto scopeArr = ArrayAttr::get(ctx, {scope});
+    auto emptyArr = ArrayAttr::get(ctx, {});
+
+    // Forward-walk pointer-derived SSA from each root GEP, marking every
+    // reachable load/store. We treat the following as pointer-preserving:
+    //   GEP (untagged), AddrSpaceCast/Bitcast/PtrToInt/IntToPtr, and
+    //   integer arithmetic on `ptrtoint` values (common for LDS swizzling).
+    llvm::SmallPtrSet<Value, 32> visited;
+    SmallVector<Value> worklist;
+    for (auto *root : rootOps)
+      for (Value r : root->getResults())
+        worklist.push_back(r);
+
+    while (!worklist.empty()) {
+      Value v = worklist.pop_back_val();
+      if (!visited.insert(v).second)
+        continue;
+      for (OpOperand &use : v.getUses()) {
+        Operation *user = use.getOwner();
+        // Stop at another tagged root (it represents an independent
+        // allocation tree).
+        if (auto gep = dyn_cast<LLVM::GEPOp>(user)) {
+          if (gep->hasAttr("fly.alloc_id"))
+            continue;
+          worklist.push_back(gep.getResult());
+        } else if (isa<LLVM::AddrSpaceCastOp, LLVM::BitcastOp, LLVM::PtrToIntOp,
+                       LLVM::IntToPtrOp, arith::AddIOp, arith::SubIOp,
+                       arith::AndIOp, arith::OrIOp, arith::XOrIOp,
+                       arith::ShLIOp, arith::ShRUIOp, arith::ShRSIOp,
+                       arith::MulIOp>(user)) {
+          for (Value r : user->getResults())
+            worklist.push_back(r);
+        } else if (isa<ROCDL::RawPtrBufferLoadLdsOp>(user)) {
+          // Skip: see pass header comment.
+        } else if (auto aa = dyn_cast<LLVM::AliasAnalysisOpInterface>(user)) {
+          aa.setAliasScopes(scopeArr);
+          aa.setNoAliasScopes(emptyArr);
+        }
+      }
+    }
+    return WalkResult::advance();
+  });
+}
+
+// Drop fly.alloc_id from any remaining LLVM::GEPOp after
+// annotateSharedAllocAliasScopes has consumed them.
+static void cleanupAllocIdAttrs(Operation *topOp) {
+  topOp->walk([](Operation *o) {
+    if (isa<LLVM::GEPOp>(o))
+      o->removeAttr("fly.alloc_id");
+  });
+}
+
 class FlyToROCDLConversionPass
     : public mlir::impl::FlyToROCDLConversionPassBase<FlyToROCDLConversionPass> {
 public:
@@ -834,8 +937,13 @@ public:
     populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
     populateFunctionOpInterfaceTypeConversionPattern<gpu::GPUFuncOp>(patterns, typeConverter);
 
-    if (failed(applyPartialConversion(getOperation(), target, std::move(patterns))))
+    if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
       signalPassFailure();
+      return;
+    }
+
+    annotateSharedAllocAliasScopes(getOperation());
+    cleanupAllocIdAttrs(getOperation());
   }
 };
 
